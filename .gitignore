@@ -1,0 +1,52 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+package-lock.json
+yarn.lock
+
+# agent tooling
+.atl/
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# env files (keep the example committed)
+.env*
+!.env.example
+
+# key material / credentials (never commit)
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.jks
+*.p12
+*.pfx
+/secrets/
+/credentials/
+
+# misc
+.DS_Store
+*.log
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# vercel
+.vercel
