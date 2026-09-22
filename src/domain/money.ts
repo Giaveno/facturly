@@ -3,6 +3,9 @@
  * fiscal path — amounts are parsed, stored, and summed as integer centavos.
  */
 
+/** Money as integer centavos — never float. The canonical money unit type. */
+export type Centavos = number;
+
 /** Thrown when an amount string cannot be parsed to integer centavos. */
 function invalidAmount(input: string): Error {
   return new Error(`Invalid monetary amount: "${input}"`);
