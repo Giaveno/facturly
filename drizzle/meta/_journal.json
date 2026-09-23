@@ -8,6 +8,13 @@
       "when": 1790106121392,
       "tag": "0000_fine_gideon",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790107397080,
+      "tag": "0001_brainy_joshua_kane",
+      "breakpoints": true
     }
   ]
 }

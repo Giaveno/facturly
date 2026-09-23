@@ -258,3 +258,20 @@ export const credentials = pgTable("credentials", {
   iv: text("iv").notNull(),
   authTag: text("auth_tag").notNull(),
 });
+
+/**
+ * WSAA ticket cache — one row per ARCA service (`wsfe`, `ws_sr_constancia_inscripcion`).
+ *
+ * The `service` primary key makes the two TAs cache INDEPENDENTLY (design: keys
+ * `ta:wsfe` and `ta:padron`). Timestamps are epoch milliseconds (bigint) so the
+ * cache logic compares integers — no Date/timezone ambiguity between PGlite and
+ * Neon. This DB-backed cache is required because the app runs on serverless
+ * (Next.js): a process-memory cache does NOT survive across invocations.
+ */
+export const taCache = pgTable("ta_cache", {
+  service: text("service").primaryKey(),
+  token: text("token").notNull(),
+  sign: text("sign").notNull(),
+  expiresAtMs: bigint("expires_at_ms", { mode: "number" }).notNull(),
+  issuedAtMs: bigint("issued_at_ms", { mode: "number" }).notNull(),
+});

@@ -1,7 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "@/test-support/test-db";
-import { batches, clients, invoices, ocrRows, photos } from "./schema";
+import {
+  batches,
+  clients,
+  invoices,
+  issuedInvoices,
+  ocrRows,
+  photos,
+  payers,
+} from "./schema";
 import type { Db } from "./types";
 
 /**
@@ -18,6 +26,18 @@ describe("schema guarantees", () => {
 
   afterAll(async () => {
     await close();
+  });
+
+  // Per-test isolation: wipe every table (in FK-dependency order) so each test
+  // starts from a clean DB instead of relying on distinct hardcoded CUITs.
+  beforeEach(async () => {
+    await db.delete(issuedInvoices);
+    await db.delete(invoices);
+    await db.delete(ocrRows);
+    await db.delete(photos);
+    await db.delete(batches);
+    await db.delete(payers);
+    await db.delete(clients);
   });
 
   const seedRow = async (clientId: string) => {
