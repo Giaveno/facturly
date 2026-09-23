@@ -10,6 +10,7 @@ const req: FECAEReq = {
   cuit: "20123456786",
   ptoVta: 1,
   cbteTipo: 1,
+  cbteNro: 7,
   receptorDocTipo: 80,
   receptorDocNro: 30710145764,
   receptorRazonSocial: "EMPRESA EJEMPLO S.A.",
@@ -25,13 +26,17 @@ const req: FECAEReq = {
 describe("arca-gateway.fake — deterministic, offline", () => {
   it("resolves a seeded CUIT to its IVA condition", async () => {
     const fake = new ArcaGatewayFake();
-    expect(await fake.getIvaCondition("20123456786")).toBe("ri");
-    expect(await fake.getIvaCondition("30710145764")).toBe("monotributista");
+    expect(await fake.getIvaCondition("20123456786", "20123456786")).toBe("ri");
+    expect(await fake.getIvaCondition("20123456786", "30710145764")).toBe(
+      "monotributista",
+    );
   });
 
   it("returns 'unresolved' for an unknown CUIT", async () => {
     const fake = new ArcaGatewayFake();
-    expect(await fake.getIvaCondition("99999999999")).toBe("unresolved");
+    expect(await fake.getIvaCondition("20123456786", "99999999999")).toBe(
+      "unresolved",
+    );
   });
 
   it("issues invoices with sequential numbers and exact 14-digit CAEs", async () => {

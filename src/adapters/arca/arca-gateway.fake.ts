@@ -56,8 +56,11 @@ export class ArcaGatewayFake implements ArcaGateway {
     ],
   );
 
-  async getIvaCondition(cuit: string): Promise<CondicionIVA | "unresolved"> {
-    return this.conditions.get(cuit) ?? "unresolved";
+  async getIvaCondition(
+    _clientCuit: string,
+    payerCuit: string,
+  ): Promise<CondicionIVA | "unresolved"> {
+    return this.conditions.get(payerCuit) ?? "unresolved";
   }
 
   async issueInvoice(req: FECAEReq): Promise<IssueInvoiceResult> {

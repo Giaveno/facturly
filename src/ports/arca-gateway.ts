@@ -16,6 +16,13 @@ export interface FECAEReq {
   ptoVta: number;
   /** Comprobante tipo (1|6|11 — see policy.ts). */
   cbteTipo: CbteTipo;
+  /**
+   * The INTENDED comprobante number (CbteDesde = CbteHasta). The caller pins
+   * this (from a persisted reservation); the gateway does NOT derive it from
+   * FECompUltimoAutorizado. A retry MUST replay the SAME number so ARCA returns
+   * 10015/10016 and the existing CAE is recovered via FECompConsultar.
+   */
+  cbteNro: number;
   /** Receptor document type (80 CUIT, 99 consumidor final). */
   receptorDocTipo: number;
   /** Receptor document number. */
@@ -49,7 +56,15 @@ export interface IssueInvoiceResult {
 }
 
 export interface ArcaGateway {
-  /** Padrón A5 → normalized IVA condition, or "unresolved" when absent. */
-  getIvaCondition(cuit: string): Promise<CondicionIVA | "unresolved">;
+  /**
+   * Padrón A5 → normalized IVA condition, or "unresolved" when the person is
+   * genuinely absent from the Padrón. A lookup ERROR throws (never downgrades
+   * to Consumidor Final). `clientCuit` is the delegating client CUIT
+   * (cuitRepresentada); `payerCuit` is the CUIT being looked up (idPersona).
+   */
+  getIvaCondition(
+    clientCuit: string,
+    payerCuit: string,
+  ): Promise<CondicionIVA | "unresolved">;
   issueInvoice(r: FECAEReq): Promise<IssueInvoiceResult>;
 }
