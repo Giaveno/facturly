@@ -18,6 +18,10 @@ export interface ReviewRow {
   razonSocial: string;
   /** UI hint only — see `isRowEmittable` for the real enforcement. */
   blocked: boolean;
+  /** True when the async OCR crashed — actionable, never emittable (W7). */
+  failed: boolean;
+  /** The OCR failure reason, when `failed` is true. */
+  error: string | null;
 }
 
 /**
@@ -35,6 +39,7 @@ export async function listReviewRows(db: Db): Promise<ReviewRow[]> {
       fields: ocrRows.fields,
       clientId: batches.clientId,
       razonSocial: clients.razonSocial,
+      error: ocrRows.error,
     })
     .from(ocrRows)
     .innerJoin(photos, eq(ocrRows.photoId, photos.id))
@@ -42,5 +47,9 @@ export async function listReviewRows(db: Db): Promise<ReviewRow[]> {
     .innerJoin(clients, eq(batches.clientId, clients.id))
     .orderBy(ocrRows.createdAt);
 
-  return rows.map((r) => ({ ...r, blocked: r.status === "BLOCKED" }));
+  return rows.map((r) => ({
+    ...r,
+    blocked: r.status === "BLOCKED",
+    failed: r.status === "FAILED",
+  }));
 }

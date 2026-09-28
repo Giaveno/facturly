@@ -1,0 +1,141 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The routes are thin handlers over already-tested services; here we mock their
+// dependencies to prove the route-level behaviors: W5 (UUID → 400), C6 (auth
+// seam → 401), W4 (opaque 500), and C4 (approve sends the emit event).
+vi.mock("@/lib/auth/session", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth/session")>();
+  return { ...actual, requireAccountantSession: vi.fn() };
+});
+vi.mock("@/lib/db/client", () => ({ getDb: vi.fn() }));
+vi.mock("@/lib/emission/gateway", () => ({ buildArcaGateway: vi.fn() }));
+vi.mock("@/lib/review/workflow", () => ({
+  approveInvoice: vi.fn(),
+  rejectInvoice: vi.fn(),
+}));
+vi.mock("@/lib/inngest/client", () => ({ inngest: { send: vi.fn() } }));
+
+import {
+  requireAccountantSession,
+  UnauthorizedError,
+} from "@/lib/auth/session";
+import { getDb } from "@/lib/db/client";
+import { buildArcaGateway } from "@/lib/emission/gateway";
+import { approveInvoice, rejectInvoice } from "@/lib/review/workflow";
+import { inngest } from "@/lib/inngest/client";
+import { POST as approvePOST } from "@/app/api/invoices/[id]/approve/route";
+import { POST as rejectPOST } from "@/app/api/invoices/[id]/reject/route";
+
+const VALID_UUID = "00000000-0000-4000-8000-000000000000";
+
+function req(body?: string): Request {
+  return new Request("http://test/api", {
+    method: "POST",
+    body,
+  });
+}
+
+function params(id: string) {
+  return { params: Promise.resolve({ id }) };
+}
+
+describe("invoice approve/reject routes — W5, C6, W4, C4", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Fail-closed default: the auth seam denies.
+    vi.mocked(requireAccountantSession).mockImplementation(() => {
+      throw new UnauthorizedError();
+    });
+    // No DATABASE_URL in tests → getDb throws, simulating a DB failure.
+    vi.mocked(getDb).mockImplementation(() => {
+      throw new Error("DATABASE_URL is not set — cannot connect to Neon");
+    });
+  });
+
+  it("W5: approve rejects a non-UUID [id] with 400 before auth or DB", async () => {
+    const res = await approvePOST(req(), params("not-a-uuid"));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe("Invalid invoice id");
+    expect(typeof body.correlationId).toBe("string");
+    expect(requireAccountantSession).not.toHaveBeenCalled();
+    expect(getDb).not.toHaveBeenCalled();
+  });
+
+  it("W5: reject rejects a non-UUID [id] with 400 before auth or DB", async () => {
+    const res = await rejectPOST(req(), params("nope"));
+    expect(res.status).toBe(400);
+    expect(getDb).not.toHaveBeenCalled();
+  });
+
+  it("C6: approve rejects with 401 when the auth seam denies", async () => {
+    const res = await approvePOST(req(), params(VALID_UUID));
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error).toBe("Authentication required");
+  });
+
+  it("C6: reject rejects with 401 when the auth seam denies", async () => {
+    const res = await rejectPOST(req(), params(VALID_UUID));
+    expect(res.status).toBe(401);
+  });
+
+  it("W4: approve returns an opaque 500 and never leaks internal error text", async () => {
+    vi.mocked(requireAccountantSession).mockImplementation(() => {});
+    const res = await approvePOST(req(), params(VALID_UUID));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toBe("Approval failed");
+    expect(JSON.stringify(body)).not.toContain("DATABASE_URL");
+    expect(typeof body.correlationId).toBe("string");
+  });
+
+  it("W4: reject returns an opaque 500 and never leaks internal error text", async () => {
+    vi.mocked(requireAccountantSession).mockImplementation(() => {});
+    const res = await rejectPOST(
+      req(JSON.stringify({ reason: "non-sale" })),
+      params(VALID_UUID),
+    );
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toBe("Rejection failed");
+    expect(typeof body.correlationId).toBe("string");
+  });
+
+  it("C4: a successful approve sends the emit event with idempotencyKey = invoice id", async () => {
+    vi.mocked(requireAccountantSession).mockImplementation(() => {});
+    vi.mocked(getDb).mockReturnValue({} as never);
+    vi.mocked(buildArcaGateway).mockReturnValue({} as never);
+    vi.mocked(approveInvoice).mockResolvedValue({
+      id: VALID_UUID,
+      status: "APPROVED",
+    } as never);
+
+    const res = await approvePOST(req(), params(VALID_UUID));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ id: VALID_UUID, status: "APPROVED" });
+
+    expect(inngest.send).toHaveBeenCalledWith({
+      name: "emit/batch.requested",
+      data: { invoiceIds: [VALID_UUID], idempotencyKey: VALID_UUID },
+    });
+  });
+
+  it("C4: a successful reject does NOT emit", async () => {
+    vi.mocked(requireAccountantSession).mockImplementation(() => {});
+    vi.mocked(getDb).mockReturnValue({} as never);
+    vi.mocked(rejectInvoice).mockResolvedValue({
+      id: VALID_UUID,
+      status: "REJECTED",
+      discardReason: "non-sale",
+    } as never);
+
+    const res = await rejectPOST(
+      req(JSON.stringify({ reason: "non-sale" })),
+      params(VALID_UUID),
+    );
+    expect(res.status).toBe(200);
+    expect(inngest.send).not.toHaveBeenCalled();
+  });
+});
