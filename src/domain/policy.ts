@@ -27,6 +27,22 @@ export interface CbteTipoDecision {
   requiresLey27618Legend: boolean;
 }
 
+/**
+ * WSFEv1 receptor DOCUMENT TYPES (`DocTipo`). A receptor identified by a CUIT
+ * is `80`; a Consumidor Final (no CUIT) is `99` with `DocNro = 0`. These are
+ * SEPARATE from the IVA-condition id (`CondicionIVAReceptorId`, RG 5616).
+ */
+export const RECEPTOR_DOC_TIPO_CUIT = 80;
+export const RECEPTOR_DOC_TIPO_CONSUMIDOR_FINAL = 99;
+
+/**
+ * The WSFEv1 `CondicionIVAReceptorId` (RG 5616) value for Monotributista. Used
+ * by `requiresLey27618Legend` — the ONLY receptor whose Factura A must carry
+ * the legend. (Full mapping lives at `condicionIvaToReceptorId` in the padron
+ * adapter: 1 RI, 4 Exento, 5 CF, 6 Monotributista.)
+ */
+export const RECEPTOR_IVA_MONOTRIBUTISTA = 6;
+
 type Emisor = Exclude<CondicionIVA, "consumidorFinal">;
 
 const FACTURA_A: CbteTipo = 1;
@@ -86,4 +102,20 @@ export function cbteTipo(
  */
 export function discriminatesIva(cbteTipo: CbteTipo): boolean {
   return cbteTipo === FACTURA_A;
+}
+
+/**
+ * The Ley 27.618 legend appears ONLY on a Factura A issued to a Monotributista
+ * receptor. `cbteTipo === 1` already implies an RI emisor (only RI emits
+ * Factura A), so this single predicate identifies the RI → Monotributista cell.
+ *
+ * It keys off the receptor's IVA condition (`CondicionIVAReceptorId === 6`),
+ * NOT the document type (`DocTipo`) — a Monotributista is identified by their
+ * CUIT (DocTipo 80) but their *condition* is 6.
+ */
+export function requiresLey27618Legend(
+  cbteTipo: CbteTipo,
+  condicionIvaReceptorId: number,
+): boolean {
+  return cbteTipo === FACTURA_A && condicionIvaReceptorId === RECEPTOR_IVA_MONOTRIBUTISTA;
 }

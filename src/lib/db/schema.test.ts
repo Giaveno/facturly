@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "@/test-support/test-db";
 import {
+  auditLog,
   batches,
   clients,
   invoices,
@@ -31,6 +32,7 @@ describe("schema guarantees", () => {
   // Per-test isolation: wipe every table (in FK-dependency order) so each test
   // starts from a clean DB instead of relying on distinct hardcoded CUITs.
   beforeEach(async () => {
+    await db.delete(auditLog);
     await db.delete(issuedInvoices);
     await db.delete(invoices);
     await db.delete(ocrRows);

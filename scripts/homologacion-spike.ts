@@ -158,6 +158,7 @@ async function main(): Promise<void> {
     concepto: 1,
     docTipo: 99, // consumidor final
     docNro: 0,
+    condicionIvaReceptorId: 5, // consumidor final (RG 5616)
     cbteFch: new Date().toISOString().slice(0, 10),
     impNetoCentavos: 100,
     impIvaCentavos: 0,

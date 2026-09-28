@@ -46,6 +46,9 @@ export const ocrRowStatus = pgEnum("ocr_row_status", [
   "CONFIDENT",
   "BLOCKED",
   "CORRECTED",
+  // A crashed/failed extraction must be distinct from "in progress" (PENDING)
+  // so the accountant can see and act on it (W7).
+  "FAILED",
 ]);
 
 export const invoiceStatus = pgEnum("invoice_status", [
@@ -55,7 +58,11 @@ export const invoiceStatus = pgEnum("invoice_status", [
   "EMITTING",
   "EMITTED",
   "REJECTED",
+  // EMIT_ERROR: transient failure, recoverable (the reservation replays its
+  // pinned cbteNro). EMIT_FAILED: a PERMANENT ARCA rejection — terminal, never
+  // re-queued by the recovery sweeper (W2).
   "EMIT_ERROR",
+  "EMIT_FAILED",
 ]);
 
 /**
@@ -152,6 +159,9 @@ export const ocrRows = pgTable("ocr_rows", {
   // Checksum-validated CUIT, or null when absent (registry resolution).
   cuit: text("cuit"),
   status: ocrRowStatus("status").notNull().default("PENDING"),
+  // Set when a PENDING row's async OCR fails (status FAILED) — the reason the
+  // extraction crashed, surfaced to the accountant (W7).
+  error: text("error"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -175,6 +185,9 @@ export const invoices = pgTable(
     discardReason: text("discard_reason"),
     receptorDocTipo: integer("receptor_doc_tipo"),
     receptorDocNro: bigint("receptor_doc_nro", { mode: "number" }),
+    // WSFEv1 `CondicionIVAReceptorId` (RG 5616): 1 RI, 4 Exento, 5 CF, 6
+    // Monotributista. This is SEPARATE from `receptorDocTipo` (80 CUIT / 99 CF).
+    condicionIvaReceptorId: integer("condicion_iva_receptor_id"),
     receptorRazonSocial: text("receptor_razon_social"),
     fechaEmision: date("fecha_emision"),
     fechaVto: date("fecha_vto"),
@@ -199,6 +212,15 @@ export const invoices = pgTable(
  * error 10015/10016 on an already-issued (cuit, ptoVta, cbteTipo, cbteNro).
  * This unique index makes a re-emit physically impossible: the DB rejects a
  * second row with the same key before ARCA is ever contacted.
+ *
+ * RESERVATION PATTERN (slice 4): the emission job inserts the row with the
+ * intended `cbteNro` BEFORE calling ARCA, so the unique index pins the number
+ * and a concurrent/duplicate attempt is rejected at the DB. At that moment the
+ * CAE does not exist yet, so `cae`/`caeFchVto` are NULLABLE — a NULL CAE marks a
+ * reservation that is still awaiting ARCA (or stuck in EMIT_ERROR). The CAE is
+ * written onto the SAME row after `FECAESolicitar` returns. A retry replays the
+ * pinned `cbteNro` (never re-derives it) so ARCA returns 10015/10016 and the
+ * CAE is recovered via FECompConsultar.
  */
 export const issuedInvoices = pgTable(
   "issued_invoices",
@@ -211,8 +233,10 @@ export const issuedInvoices = pgTable(
     ptoVta: integer("pto_vta").notNull(),
     cbteTipo: integer("cbte_tipo").notNull(),
     cbteNro: bigint("cbte_nro", { mode: "number" }).notNull(),
-    cae: text("cae").notNull(),
-    caeFchVto: date("cae_fch_vto").notNull(),
+    // Nullable: a reservation row (emission in flight or EMIT_ERROR) has no CAE
+    // yet. The unique idempotency index is what prevents a duplicate emission.
+    cae: text("cae"),
+    caeFchVto: date("cae_fch_vto"),
     // Every other money column carries the `_centavos` suffix; this one must too.
     importeTotalCentavos: bigint("importe_total_centavos", {
       mode: "number",
@@ -220,12 +244,20 @@ export const issuedInvoices = pgTable(
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
+    // ARCA's canonical duplicate signal is (cuit, ptoVta, cbteTipo, cbteNro).
+    // This unique index makes a re-emit of the SAME NUMBER physically
+    // impossible (the DB rejects a second row before ARCA is contacted).
     uniqueIndex("issued_invoices_idempotency").on(
       table.cuit,
       table.ptoVta,
       table.cbteTipo,
       table.cbteNro,
     ),
+    // The fiscal identity of an emission is the INVOICE row, not the number.
+    // One invoice can have AT MOST one reservation regardless of which number
+    // the (concurrent) allocator picked — this is the real guard against a
+    // second invoice for the same sale (C3).
+    uniqueIndex("issued_invoices_invoice_id_unique").on(table.invoiceId),
   ],
 );
 

@@ -10,8 +10,13 @@
  * (slice 4) share one source of truth.
  */
 
-/** OCR row status — mirrors the `ocr_row_status` pgEnum. */
-export type OcrRowStatus = "PENDING" | "CONFIDENT" | "BLOCKED" | "CORRECTED";
+/** OCR row status — mirrors the `ocr_row_status` pgEnum (incl. W7 FAILED). */
+export type OcrRowStatus =
+  | "PENDING"
+  | "CONFIDENT"
+  | "BLOCKED"
+  | "CORRECTED"
+  | "FAILED";
 
 /**
  * Statuses under which a row must NEVER be emitted.
@@ -28,6 +33,10 @@ const NON_EMITTABLE_STATUSES: ReadonlySet<string> = new Set([
   // PENDING is the async OCR intermediate (slice-4 Inngest): a row that has not
   // finished OCR is not emittable either.
   "PENDING",
+  // FAILED (ocr_row) — a crashed extraction is not emittable (W7).
+  "FAILED",
+  // EMIT_FAILED (invoice) — a permanent ARCA rejection is terminal (W2).
+  "EMIT_FAILED",
 ]);
 
 /** Thrown by `assertRowEmittable` when a row must not be emitted. */

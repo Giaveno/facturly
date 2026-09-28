@@ -15,6 +15,20 @@
       "when": 1790107397080,
       "tag": "0001_brainy_joshua_kane",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790187173719,
+      "tag": "0002_daily_shotgun",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790190910188,
+      "tag": "0003_noisy_union_jack",
+      "breakpoints": true
     }
   ]
 }
