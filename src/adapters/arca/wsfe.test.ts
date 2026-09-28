@@ -25,6 +25,7 @@ const REQ: FecaesolicitarRequest = {
   concepto: 1,
   docTipo: 80,
   docNro: 30710145764,
+  condicionIvaReceptorId: 6, // monotributista (RG 5616)
   cbteFch: "2026-09-22",
   impNetoCentavos: 100000,
   impIvaCentavos: 21000,

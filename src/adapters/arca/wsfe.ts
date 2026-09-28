@@ -19,6 +19,7 @@
 import { XMLParser } from "fast-xml-parser";
 import { formatCentavos } from "@/domain/money";
 import { escapeXml, validateMonId } from "./xml";
+import type { FECAEReq } from "@/ports/arca-gateway";
 
 /** WSFEv1 authentication header. */
 export interface WsfeAuth {
@@ -50,6 +51,11 @@ export interface FecaesolicitarRequest {
   concepto: number;
   docTipo: number;
   docNro: number;
+  /**
+   * Condición frente al IVA del receptor (RG 5616): 1 RI, 4 Exento, 5 CF,
+   * 6 Monotributista. Serialized as `<ar:CondicionIVAReceptorId>`.
+   */
+  condicionIvaReceptorId: number;
   /** Emission date, YYYY-MM-DD. */
   cbteFch: string;
   impNetoCentavos: number;
@@ -141,6 +147,43 @@ function envelope(operationBody: string): string {
   );
 }
 
+/**
+ * Maps the port's `FECAEReq` to a `FecaesolicitarRequest` — the SOAP-boundary
+ * request shape. Single place for the field mapping so the emission gateway and
+ * the cross-boundary tests share one source of truth (C1).
+ *
+ * IVA: a single 21% alícuota (id 5) is derived when the invoice discriminates
+ * IVA (`importeIva > 0`); Factura B/C carry an empty IVA array.
+ */
+export function fecaReqToSolicitar(req: FECAEReq): FecaesolicitarRequest {
+  return {
+    ptoVta: req.ptoVta,
+    cbteTipo: req.cbteTipo,
+    cbteNro: req.cbteNro,
+    concepto: 1,
+    docTipo: req.receptorDocTipo,
+    docNro: req.receptorDocNro,
+    condicionIvaReceptorId: req.condicionIvaReceptorId,
+    cbteFch: req.fechaEmision,
+    impNetoCentavos: req.importeNeto,
+    impIvaCentavos: req.importeIva,
+    impTotalCentavos: req.importeTotal,
+    fchVtoPago: req.fechaVto,
+    monId: req.moneda,
+    monCotiz: req.cotizacion,
+    iva:
+      req.importeIva > 0
+        ? [
+            {
+              id: 5,
+              baseImpCentavos: req.importeNeto,
+              importeCentavos: req.importeIva,
+            },
+          ]
+        : [],
+  };
+}
+
 /** Builds the `FECAESolicitar` SOAP envelope. */
 export function buildFecaesolicitarEnvelope(
   auth: WsfeAuth,
@@ -184,6 +227,7 @@ export function buildFecaesolicitarEnvelope(
     `<ar:FchVtoPago>${formatDateYyyyMmDd(req.fchVtoPago)}</ar:FchVtoPago>` +
     `<ar:MonId>${escapeXml(validateMonId(req.monId))}</ar:MonId>` +
     `<ar:MonCotiz>${req.monCotiz}</ar:MonCotiz>` +
+    `<ar:CondicionIVAReceptorId>${req.condicionIvaReceptorId}</ar:CondicionIVAReceptorId>` +
     `<ar:Iva>${ivaItems}</ar:Iva>` +
     "</ar:FECAEDetRequest>" +
     "</ar:FeDetReq>" +

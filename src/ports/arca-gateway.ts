@@ -27,6 +27,12 @@ export interface FECAEReq {
   receptorDocTipo: number;
   /** Receptor document number. */
   receptorDocNro: number;
+  /**
+   * WSFEv1 `CondicionIVAReceptorId` (RG 5616): 1 RI, 4 Exento, 5 CF, 6
+   * Monotributista. SEPARATE from `receptorDocTipo` — this is the receptor's
+   * IVA condition, not their document type. Mandatory since 2026-09-01.
+   */
+  condicionIvaReceptorId: number;
   /** Receptor legal name. */
   receptorRazonSocial: string;
   /** Emission date (CbteFch), YYYY-MM-DD. */
@@ -67,4 +73,16 @@ export interface ArcaGateway {
     payerCuit: string,
   ): Promise<CondicionIVA | "unresolved">;
   issueInvoice(r: FECAEReq): Promise<IssueInvoiceResult>;
+  /**
+   * The LAST authorized comprobante number for `(cuit, ptoVta, cbteTipo)`
+   * (WSFEv1 `FECompUltimoAutorizado`). The emission job queries this ONCE per
+   * `(ptoVta, cbteTipo)` per batch and increments locally for subsequent
+   * invoices — never once per invoice. Returns 0 when nothing has been issued
+   * yet, so the first comprobante is 1.
+   */
+  ultimoAutorizado(
+    cuit: string,
+    ptoVta: number,
+    cbteTipo: CbteTipo,
+  ): Promise<number>;
 }

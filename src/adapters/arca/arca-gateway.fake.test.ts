@@ -13,6 +13,7 @@ const req: FECAEReq = {
   cbteNro: 7,
   receptorDocTipo: 80,
   receptorDocNro: 30710145764,
+  condicionIvaReceptorId: 6, // monotributista (RG 5616)
   receptorRazonSocial: "EMPRESA EJEMPLO S.A.",
   fechaEmision: "2026-09-22",
   fechaVto: "2026-10-22",
@@ -39,23 +40,45 @@ describe("arca-gateway.fake — deterministic, offline", () => {
     );
   });
 
-  it("issues invoices with sequential numbers and exact 14-digit CAEs", async () => {
+  it("honors the CALLER-PINNED cbteNro (never assigns its own number)", async () => {
     const fake = new ArcaGatewayFake();
-    const first = await fake.issueInvoice(req);
-    const second = await fake.issueInvoice(req);
-
-    expect(first.cbteNro).toBe(1);
-    expect(second.cbteNro).toBe(2);
+    const result = await fake.issueInvoice({ ...req, cbteNro: 7 });
+    expect(result.cbteNro).toBe(7);
     // Deterministic CAE: CAE_BASE + cbteNro, zero-padded to 14 digits.
-    expect(first.cae).toBe(String(CAE_BASE + 1).padStart(14, "0"));
-    expect(second.cae).toBe(String(CAE_BASE + 2).padStart(14, "0"));
+    expect(result.cae).toBe(String(CAE_BASE + 7).padStart(14, "0"));
+    expect(result.cae).toHaveLength(14);
+  });
+
+  it("returns the SAME prior CAE on a duplicate (models 10015/10016 → FECompConsultar)", async () => {
+    const fake = new ArcaGatewayFake();
+    const first = await fake.issueInvoice({ ...req, cbteNro: 7 });
+    const dup = await fake.issueInvoice({ ...req, cbteNro: 7 });
+    expect(dup.cae).toBe(first.cae);
+    expect(dup.cbteNro).toBe(7);
+  });
+
+  it("issues DISTINCT numbers (as the caller would) to distinct CAEs", async () => {
+    const fake = new ArcaGatewayFake();
+    const first = await fake.issueInvoice({ ...req, cbteNro: 7 });
+    const second = await fake.issueInvoice({ ...req, cbteNro: 8 });
     expect(first.cae).not.toBe(second.cae);
+    expect(first.cbteNro).toBe(7);
+    expect(second.cbteNro).toBe(8);
+  });
+
+  it("ultimoAutorizado returns 0 when nothing issued, then the last issued number", async () => {
+    const fake = new ArcaGatewayFake();
+    expect(await fake.ultimoAutorizado("20123456786", 1, 1)).toBe(0);
+    await fake.issueInvoice({ ...req, cbteNro: 7 });
+    expect(await fake.ultimoAutorizado("20123456786", 1, 1)).toBe(7);
+    // A different key is independent.
+    expect(await fake.ultimoAutorizado("20123456786", 1, 6)).toBe(0);
   });
 
   it("derives an EXACT due date from an injected clock (10-day validity)", async () => {
     const fixed = new Date("2026-09-22T00:00:00.000Z");
-    const fake = new ArcaGatewayFake(undefined, 1, () => fixed);
-    const result = await fake.issueInvoice(req);
+    const fake = new ArcaGatewayFake(undefined, () => fixed);
+    const result = await fake.issueInvoice({ ...req, cbteNro: 1 });
 
     // 2026-09-22 + CAE_VALIDITY_DAYS (10) = 2026-10-02.
     expect(result.caeFchVto).toBe("2026-10-02");
@@ -66,7 +89,7 @@ describe("arca-gateway.fake — deterministic, offline", () => {
 
   it("does not require network or keys (pure in-memory)", async () => {
     const fake = new ArcaGatewayFake(new Map([["20123456786", "ri"]]));
-    const result = await fake.issueInvoice(req);
+    const result = await fake.issueInvoice({ ...req, cbteNro: 1 });
     expect(result.cbteNro).toBe(1);
   });
 });

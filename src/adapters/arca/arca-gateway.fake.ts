@@ -1,10 +1,14 @@
 /**
- * Deterministic in-memory ARCA gateway fake. No network, no keys. Two
- * behaviors, both pure:
+ * Deterministic in-memory ARCA gateway fake. No network, no keys.
  *
- *   getIvaCondition — looks up a seeded CUIT→condition map; unknown → "unresolved".
- *   issueInvoice    — assigns sequential cbteNro and a 14-digit CAE from a
- *                     deterministic counter, with a fixed, injectable clock.
+ *   getIvaCondition  — looks up a seeded CUIT→condition map; unknown → "unresolved".
+ *   issueInvoice     — honors the CALLER-PINNED `req.cbteNro` (slice-3 port
+ *                      amendment) and returns a 14-digit CAE from a deterministic
+ *                      formula. A second call with the SAME `(cuit, ptoVta,
+ *                      cbteTipo, cbteNro)` returns the SAME prior CAE — the fake
+ *                      models ARCA's 10015/10016 duplicate + FECompConsultar
+ *                      recovery as "return the already-issued CAE".
+ *   ultimoAutorizado — the last issued comprobante number per key (0 = none).
  *
  * Determinism: `issueInvoice` derives `caeFchVto` from an injected clock (a
  * function returning a `Date`). The default is the real clock; tests inject a
@@ -33,18 +37,23 @@ export const CAE_VALIDITY_DAYS = 10;
 /** A clock returning the current instant. Injectable for determinism. */
 export type Clock = () => Date;
 
+function key(cuit: string, ptoVta: number, cbteTipo: number): string {
+  return `${cuit}:${ptoVta}:${cbteTipo}`;
+}
+
 export class ArcaGatewayFake implements ArcaGateway {
   private readonly conditions: ReadonlyMap<string, CondicionIVA>;
   private readonly clock: Clock;
-  private nextCbteNro: number;
+  /** Last authorized comprobante number per (cuit, ptoVta, cbteTipo). */
+  private readonly lastAuthorized = new Map<string, number>();
+  /** Issued CAEs per (cuit, ptoVta, cbteTipo, cbteNro) — powers duplicate recovery. */
+  private readonly issued = new Map<string, IssueInvoiceResult>();
 
   constructor(
     conditions: ReadonlyMap<string, CondicionIVA> = ArcaGatewayFake.DEFAULT_CONDITIONS,
-    firstCbteNro = 1,
     clock: Clock = () => new Date(),
   ) {
     this.conditions = conditions;
-    this.nextCbteNro = firstCbteNro;
     this.clock = clock;
   }
 
@@ -63,16 +72,36 @@ export class ArcaGatewayFake implements ArcaGateway {
     return this.conditions.get(payerCuit) ?? "unresolved";
   }
 
+  async ultimoAutorizado(
+    cuit: string,
+    ptoVta: number,
+    cbteTipo: number,
+  ): Promise<number> {
+    return this.lastAuthorized.get(key(cuit, ptoVta, cbteTipo)) ?? 0;
+  }
+
   async issueInvoice(req: FECAEReq): Promise<IssueInvoiceResult> {
-    // The fake is a deterministic counter; the request content is irrelevant
-    // to the issued number/CAE, but the parameter is part of the port contract.
-    void req;
-    const cbteNro = this.nextCbteNro++;
-    return {
+    // The fake honors the CALLER-PINNED number (the port contract since slice 3).
+    const cbteNro = req.cbteNro;
+    const duplicateKey = `${key(req.cuit, req.ptoVta, req.cbteTipo)}:${cbteNro}`;
+
+    // Duplicate recovery: an already-issued number returns the SAME prior CAE
+    // (models ARCA 10015/10016 → FECompConsultar).
+    const prior = this.issued.get(duplicateKey);
+    if (prior) return prior;
+
+    const result: IssueInvoiceResult = {
       cae: String(CAE_BASE + cbteNro).padStart(14, "0"),
       caeFchVto: this.caeDueDate(),
       cbteNro,
     };
+    this.issued.set(duplicateKey, result);
+    const sk = key(req.cuit, req.ptoVta, req.cbteTipo);
+    this.lastAuthorized.set(
+      sk,
+      Math.max(this.lastAuthorized.get(sk) ?? 0, cbteNro),
+    );
+    return result;
   }
 
   private caeDueDate(): string {

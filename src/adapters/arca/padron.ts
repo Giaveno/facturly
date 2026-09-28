@@ -97,9 +97,13 @@ export function padronPersonaToCondicion(
 }
 
 /**
- * The WSFEv1 receptor IVA ID for a normalized condition (design's ReceptorId
- * column). `unresolved` THROWS — the invoice-detail builder must flag the payer
- * for review, not silently emit a Consumidor Final invoice.
+ * The WSFEv1 `CondicionIVAReceptorId` for a normalized condition (RG 5616:
+ * 1 RI, 4 Exento, 5 CF, 6 Monotributista). `unresolved` THROWS — the
+ * invoice-detail builder must flag the payer for review, not silently emit a
+ * Consumidor Final invoice.
+ *
+ * NOTE: this is the receptor's IVA CONDITION, NOT their document type
+ * (`DocTipo`, which is 80=CUIT / 99=CF). They are separate WSFEv1 fields.
  */
 export function condicionIvaToReceptorId(
   condicion: CondicionIVA | "unresolved",

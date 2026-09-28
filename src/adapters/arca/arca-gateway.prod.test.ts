@@ -74,6 +74,7 @@ const REQ: FECAEReq = {
   cbteNro: 7,
   receptorDocTipo: 80,
   receptorDocNro: 30710145764,
+  condicionIvaReceptorId: 6, // monotributista (RG 5616)
   receptorRazonSocial: "EMPRESA EJEMPLO S.A.",
   fechaEmision: "2026-09-22",
   fechaVto: "2026-10-22",

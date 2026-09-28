@@ -28,7 +28,7 @@ import type {
   IssueInvoiceResult,
 } from "@/ports/arca-gateway";
 import type { CondicionIVA } from "@/domain/policy";
-import { WsfeClient } from "./wsfe";
+import { WsfeClient, fecaReqToSolicitar } from "./wsfe";
 import { PadronA5Client } from "./padron";
 import { TaCache, type TaCacheStore } from "./ta-cache";
 import { WsaaClient, type WsaaCredentialsProvider, type WsaaTa } from "./wsaa";
@@ -81,6 +81,19 @@ export class ArcaGatewayProd implements ArcaGateway {
     });
   }
 
+  async ultimoAutorizado(
+    cuit: string,
+    ptoVta: number,
+    cbteTipo: number,
+  ): Promise<number> {
+    return this.withFreshTaOnAuth(ARCA_SERVICE_WSFE, async (ta) => {
+      return this.wsfe.ultimoAutorizado(
+        { token: ta.token, sign: ta.sign, cuit },
+        { ptoVta, cbteTipo },
+      );
+    });
+  }
+
   async issueInvoice(req: FECAEReq): Promise<IssueInvoiceResult> {
     if (!this.emissionsEnabled) {
       throw new ArcaBusinessError(
@@ -108,31 +121,7 @@ export class ArcaGatewayProd implements ArcaGateway {
     // Caller-pinned comprobante number (design amendment #1): never derived here.
     const cbteNro = req.cbteNro;
 
-    const result = await this.wsfe.solicitar(auth, {
-      ptoVta: req.ptoVta,
-      cbteTipo: req.cbteTipo,
-      cbteNro,
-      concepto: 1,
-      docTipo: req.receptorDocTipo,
-      docNro: req.receptorDocNro,
-      cbteFch: req.fechaEmision,
-      impNetoCentavos: req.importeNeto,
-      impIvaCentavos: req.importeIva,
-      impTotalCentavos: req.importeTotal,
-      fchVtoPago: req.fechaVto,
-      monId: req.moneda,
-      monCotiz: req.cotizacion,
-      iva:
-        req.importeIva > 0
-          ? [
-              {
-                id: 5,
-                baseImpCentavos: req.importeNeto,
-                importeCentavos: req.importeIva,
-              },
-            ]
-          : [],
-    });
+    const result = await this.wsfe.solicitar(auth, fecaReqToSolicitar(req));
 
     // Idempotency: scan BOTH channels — ARCA reports 10015/10016 in errors OR
     // observaciones, never assume it is only in errors.
