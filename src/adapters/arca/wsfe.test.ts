@@ -4,6 +4,7 @@ import {
   buildFecaesolicitarEnvelope,
   buildFecompConsultarEnvelope,
   buildFecompUltimoAutorizadoEnvelope,
+  fecaReqToSolicitar,
   parseFecaesolicitarResponse,
   parseFecompConsultarResponse,
   parseFecompUltimoAutorizadoResponse,
@@ -11,6 +12,7 @@ import {
   type FecaesolicitarRequest,
   type WsfeTransport,
 } from "./wsfe";
+import type { FECAEReq } from "@/ports/arca-gateway";
 
 const AUTH = {
   token: "VE9LRU5fQkFTRTY0",
@@ -79,6 +81,56 @@ describe("wsfe — buildFecaesolicitarEnvelope", () => {
     // A valid code passes through unmodified.
     const ok = buildFecaesolicitarEnvelope(AUTH, { ...REQ, monId: "USD" });
     expect(ok).toContain("<ar:MonId>USD</ar:MonId>");
+  });
+});
+
+describe("wsfe — fecaReqToSolicitar → buildFecaesolicitarEnvelope (cross-boundary, C1)", () => {
+  // The port `FECAEReq` (emission service) is the single source of truth for
+  // the field mapping. This drives the REAL pipeline into the SOAP bytes and
+  // asserts DocTipo (80/99) and CondicionIVAReceptorId (RG 5616) land in the
+  // serialized envelope — the exact fields that were once swapped. If a future
+  // refactor re-swaps them, THESE tests fail.
+  const base: FECAEReq = {
+    cuit: "20123456789",
+    ptoVta: 1,
+    cbteTipo: 1,
+    cbteNro: 7,
+    receptorDocTipo: 80,
+    receptorDocNro: 30710145764,
+    condicionIvaReceptorId: 6,
+    receptorRazonSocial: "MONOTRIBUTISTA S.A.",
+    fechaEmision: "2026-09-22",
+    fechaVto: "2026-10-22",
+    moneda: "PES",
+    cotizacion: 1,
+    importeNeto: 100000,
+    importeIva: 21000,
+    importeTotal: 121000,
+  };
+
+  it("Monotributista receptor → DocTipo 80 + CondicionIVAReceptorId 6 in the envelope bytes", () => {
+    const xml = buildFecaesolicitarEnvelope(AUTH, fecaReqToSolicitar(base));
+    expect(xml).toContain("<ar:DocTipo>80</ar:DocTipo>");
+    expect(xml).toContain("<ar:CondicionIVAReceptorId>6</ar:CondicionIVAReceptorId>");
+    // The document NUMBER is the 11-digit CUIT (never the IVA condition id).
+    expect(xml).toContain("<ar:DocNro>30710145764</ar:DocNro>");
+  });
+
+  it("Consumidor Final receptor → DocTipo 99 + CondicionIVAReceptorId 5 + DocNro 0", () => {
+    const cf: FECAEReq = {
+      ...base,
+      cbteTipo: 6, // Factura B — no IVA breakdown for a final consumer
+      receptorDocTipo: 99,
+      receptorDocNro: 0,
+      condicionIvaReceptorId: 5,
+      importeNeto: 100000,
+      importeIva: 0,
+      importeTotal: 100000,
+    };
+    const xml = buildFecaesolicitarEnvelope(AUTH, fecaReqToSolicitar(cf));
+    expect(xml).toContain("<ar:DocTipo>99</ar:DocTipo>");
+    expect(xml).toContain("<ar:CondicionIVAReceptorId>5</ar:CondicionIVAReceptorId>");
+    expect(xml).toContain("<ar:DocNro>0</ar:DocNro>");
   });
 });
 

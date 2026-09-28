@@ -182,12 +182,21 @@ export function buildFecaReq(
   };
 }
 
-/** Detects a Postgres/PGlite unique-violation (code 23505). */
+/** Detects a Postgres/PGlite unique-violation (code 23505), walking the error
+ * `.cause` chain — Drizzle wraps the driver error in `DrizzleQueryError`, which
+ * carries the real `code`/`message` under `.cause`. */
 function isUniqueViolation(err: unknown): boolean {
-  const e = err as { code?: string; message?: string } | null;
-  if (e?.code === "23505") return true;
-  const msg = e?.message ?? "";
-  return /duplicate key value|unique constraint|unique_violation/i.test(msg);
+  let e: unknown = err;
+  while (e && typeof e === "object") {
+    const obj = e as { code?: string; message?: string; cause?: unknown };
+    if (obj.code === "23505") return true;
+    const msg = obj.message ?? "";
+    if (/duplicate key value|unique constraint|unique_violation/i.test(msg)) {
+      return true;
+    }
+    e = obj.cause;
+  }
+  return false;
 }
 
 /**

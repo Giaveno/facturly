@@ -29,6 +29,7 @@ import {
   listRecoverableInvoiceIds,
   NumberAllocator,
   recoverStuckEmissions,
+  ReservationCollisionError,
 } from "./emission-service";
 import type { ArcaGateway, FECAEReq, IssueInvoiceResult } from "@/ports/arca-gateway";
 import type { CbteTipo } from "@/domain/policy";
@@ -540,6 +541,19 @@ describe("emission service — idempotency reservation + status machine", () => 
     expect(failedInvoice!.status).toBe("EMIT_FAILED");
     const recoverable = await listRecoverableInvoiceIds(db);
     expect(recoverable).not.toContain(a.invoiceId);
+
+    // C5: the failure is audited as emission.error with the permanent kind.
+    const audits = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.invoiceId, a.invoiceId));
+    expect(
+      audits.some(
+        (x) =>
+          x.action === "emission.error" &&
+          (x.payload as { kind?: string } | null)?.kind === "permanent",
+      ),
+    ).toBe(true);
   });
 
   it("W2: a transient failure is recorded as failed_transient and IS recoverable", async () => {
@@ -566,5 +580,90 @@ describe("emission service — idempotency reservation + status machine", () => 
     expect(failedInvoice!.status).toBe("EMIT_ERROR");
     const recoverable = await listRecoverableInvoiceIds(db);
     expect(recoverable).toContain(a.invoiceId);
+
+    // C5: the transient failure is audited as emission.error with kind transient.
+    const audits = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.invoiceId, a.invoiceId));
+    expect(
+      audits.some(
+        (x) =>
+          x.action === "emission.error" &&
+          (x.payload as { kind?: string } | null)?.kind === "transient",
+      ),
+    ).toBe(true);
+  });
+
+  it("W3: NumberAllocator seeds from max(local, ARCA) so a stale reservation is never re-allocated", async () => {
+    // ARCA says 5 is the last authorized, but a local reservation already holds
+    // 10 (crash after commit, before ARCA). The allocator MUST continue at 11,
+    // never re-allocate ARCA's stale 6.
+    const staleArca = {
+      ultimoAutorizado: async () => 5,
+    } as unknown as ArcaGateway;
+    const allocator = new NumberAllocator(staleArca, async () => 10);
+    expect(await allocator.next("20123456789", 1, 1)).toBe(11);
+
+    // Triangulate the other direction: local 3 < ARCA 7 → continue at 8.
+    const aheadArca = {
+      ultimoAutorizado: async () => 7,
+    } as unknown as ArcaGateway;
+    const allocator2 = new NumberAllocator(aheadArca, async () => 3);
+    expect(await allocator2.next("20123456789", 1, 1)).toBe(8);
+  });
+
+  it("W3: a reservation number collision surfaces as ReservationCollisionError (not a raw DB error) and leaves no orphan", async () => {
+    await seedDelegation(true);
+    const a = await seedApprovedInvoice();
+    const b = await seedApprovedInvoice();
+
+    // Invoice B already holds number 1 in the same (cuit,ptoVta,cbteTipo) key.
+    await db.insert(issuedInvoices).values({
+      invoiceId: b.invoiceId,
+      cuit: "20123456789",
+      ptoVta: 1,
+      cbteTipo: 1,
+      cbteNro: 1,
+      cae: null,
+      caeFchVto: null,
+      importeTotalCentavos: 121000,
+    });
+
+    // A custom allocator that ignores the local max forces invoice A to pick
+    // number 1 — the same number B already holds (a stale allocator / race).
+    const gateway = new ArcaGatewayFake(undefined, () => FIXED_DATE);
+    const allocator = new NumberAllocator(gateway, async () => 0);
+
+    await expect(
+      emitInvoice(deps(gateway), allocator, a.invoiceId),
+    ).rejects.toThrow(ReservationCollisionError);
+
+    // The reservation transaction rolled back — no orphan for invoice A.
+    const rows = await db
+      .select()
+      .from(issuedInvoices)
+      .where(eq(issuedInvoices.invoiceId, a.invoiceId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("W3: a reservation collision surfaces as failed_collision (not failed_permanent) and does not abort the batch", async () => {
+    await seedDelegation(true);
+    const a = await seedApprovedInvoice();
+    const b = await seedApprovedInvoice();
+    const base = new ArcaGatewayFake(undefined, () => FIXED_DATE);
+    // Drive the batch boundary with a ReservationCollisionError: `failureOf`
+    // must classify it as failed_collision — NOT failed_permanent, which is
+    // what the generic EmissionError classifier would otherwise produce.
+    const gateway = new ThrowingGateway(
+      base,
+      1,
+      new ReservationCollisionError(a.invoiceId, 1),
+    );
+
+    const results = await emitBatch(deps(gateway), [a.invoiceId, b.invoiceId]);
+
+    expect(results[0]!.outcome).toBe("failed_collision");
+    expect(results[1]!.outcome).toBe("emitted"); // the batch continues
   });
 });
