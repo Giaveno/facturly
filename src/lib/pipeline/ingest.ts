@@ -100,3 +100,52 @@ export async function processUpload(
     return { batchId: batch.id, clientId, rows };
   });
 }
+
+/**
+ * ASYNC upload path (slice 4): persists batch → photos → PENDING rows WITHOUT
+ * running OCR inline. The caller then sends one `ocr/row.pending` Inngest event
+ * per row; `processOcrRowJob` promotes each PENDING row to
+ * CONFIDENT/BLOCKED/FAILED out of the request path (C4).
+ *
+ * `processUpload` above remains the SYNCHRONOUS path (used by offline tests to
+ * exercise the OCR classification policy in-process); production uses THIS
+ * function so OCR is never on the hot request path.
+ */
+export async function queueUpload(
+  clientId: string,
+  images: UploadImage[],
+  deps: { db: Db },
+): Promise<ProcessUploadResult> {
+  const { db } = deps;
+
+  return db.transaction(async (tx) => {
+    const [batch] = await tx.insert(batches).values({ clientId }).returning();
+    if (!batch) throw new Error("queueUpload: failed to create batch");
+
+    const rows: ProcessUploadResult["rows"] = [];
+    for (const { storageKey } of images) {
+      const [photo] = await tx
+        .insert(photos)
+        .values({ batchId: batch.id, storageKey })
+        .returning();
+      if (!photo) throw new Error("queueUpload: failed to create photo");
+
+      // Born PENDING — no extraction yet; the OCR job fills fields/confidence.
+      const [row] = await tx
+        .insert(ocrRows)
+        .values({
+          photoId: photo.id,
+          fields: { name: "", amount: 0, date: "" },
+          confidence: {},
+          cuit: null,
+          status: "PENDING",
+        })
+        .returning();
+      if (!row) throw new Error("queueUpload: failed to create ocr_row");
+
+      rows.push({ id: row.id, status: "PENDING", cuit: null });
+    }
+
+    return { batchId: batch.id, clientId, rows };
+  });
+}

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "@/test-support/test-db";
 import { batches, clients, photos, ocrRows } from "@/lib/db/schema";
-import { processUpload } from "./ingest";
+import { processUpload, queueUpload } from "./ingest";
 import { listReviewRows } from "@/lib/review/read-model";
 import { markRowCorrected } from "@/lib/review/correct";
 import {
@@ -162,6 +162,33 @@ describe("offline pipeline: upload → OCR → row persists", () => {
     expect(() => assertRowEmittable(bad!.status)).toThrow(RowNotEmittableError);
   });
 
+  it("read model surfaces a FAILED row (failed + error) — W7", async () => {
+    const [batch] = await db
+      .insert(batches)
+      .values({ clientId: clientAId })
+      .returning();
+    const [photo] = await db
+      .insert(photos)
+      .values({ batchId: batch!.id, storageKey: "crash.jpg" })
+      .returning();
+    await db.insert(ocrRows).values({
+      photoId: photo!.id,
+      fields: { name: "", amount: 0, date: "" },
+      confidence: {},
+      cuit: null,
+      status: "FAILED",
+      error: "multimodal OCR crashed",
+    });
+
+    const rows = await listReviewRows(db);
+    const failed = rows.find((r) => r.status === "FAILED");
+    expect(failed).toBeDefined();
+    expect(failed!.failed).toBe(true);
+    expect(failed!.error).toContain("crashed");
+    // A FAILED row is never emittable.
+    expect(isRowEmittable("FAILED")).toBe(false);
+  });
+
   it("a BLOCKED row cannot emit; a CORRECTED row becomes emittable (REVIEWED)", async () => {
     const result = await processUpload(
       clientAId,
@@ -209,6 +236,28 @@ describe("offline pipeline: upload → OCR → row persists", () => {
     expect(batchA!.clientId).toBe(clientAId);
     expect(batchB!.clientId).toBe(clientBId);
     expect(batchA!.clientId).not.toBe(batchB!.clientId);
+  });
+
+  it("queueUpload persists PENDING rows without running OCR (async path)", async () => {
+    const result = await queueUpload(
+      clientAId,
+      [
+        { storageKey: "a.jpg", image: confident },
+        { storageKey: "b.jpg", image: lowConfidence },
+      ],
+      { db },
+    );
+
+    expect(result.rows).toHaveLength(2);
+    // Every row is born PENDING — no inline OCR, no extracted fields yet.
+    expect(result.rows.every((r) => r.status === "PENDING")).toBe(true);
+    expect(result.rows.every((r) => r.cuit === null)).toBe(true);
+
+    const rows = await db.select().from(ocrRows);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.status === "PENDING")).toBe(true);
+    expect(rows.every((r) => r.fields.amount === 0)).toBe(true);
+    expect(rows.every((r) => Object.keys(r.confidence).length === 0)).toBe(true);
   });
 
   it("rolls back the whole batch when OCR fails mid-loop (no partial rows)", async () => {

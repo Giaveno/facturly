@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { OcrFake } from "@/adapters/ocr/ocr.fake";
 import { getDb } from "@/lib/db/client";
 import { classifyDbError } from "@/lib/db/errors";
-import { processUpload } from "@/lib/pipeline/ingest";
+import { queueUpload } from "@/lib/pipeline/ingest";
+import { inngest } from "@/lib/inngest/client";
 import {
   MAX_TOTAL_BYTES,
   isUuid,
@@ -26,9 +26,9 @@ function errorJson(status: number, message: string, correlationId: string) {
  * correlation id and an opaque message is returned to the client (no DB detail,
  * no stack trace, no paths).
  *
- * Skeleton note: the OCR provider is the in-memory fake. The production
- * multimodal-LLM adapter (slice 4) replaces it behind the same OcrProvider
- * port — the route and pipeline do not change.
+ * OCR is ASYNC (C4): rows are persisted PENDING and one `ocr/row.pending`
+ * Inngest event is sent per row; `processOcrRowJob` promotes them out of the
+ * request path. The production multimodal-LLM adapter is slice-5 wiring.
  */
 export async function POST(req: Request): Promise<Response> {
   const correlationId = randomUUID();
@@ -62,10 +62,16 @@ export async function POST(req: Request): Promise<Response> {
       return errorJson(guarded.status, guarded.message, correlationId);
     }
 
-    const result = await processUpload(clientId, guarded.images, {
+    // Persist PENDING rows (no inline OCR), then trigger the async OCR job.
+    const result = await queueUpload(clientId, guarded.images, {
       db: getDb(),
-      ocr: new OcrFake(),
     });
+    for (const row of result.rows) {
+      await inngest.send({
+        name: "ocr/row.pending",
+        data: { rowId: row.id },
+      });
+    }
 
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
