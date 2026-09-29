@@ -25,7 +25,10 @@ import { OcrFake } from "@/adapters/ocr/ocr.fake";
 import { createPgliteDb } from "@/lib/db/pglite";
 import { getDb } from "@/lib/db/client";
 import { buildArcaGateway } from "@/lib/emission/gateway";
-import { requireAccountantSession } from "@/lib/auth/session";
+import {
+  requireAccountantSession,
+  type SessionResolver,
+} from "@/lib/auth/session";
 
 export type DatabaseDriver = "pg" | "pglite";
 export type ArcaAdapterMode = "prod" | "fake";
@@ -136,14 +139,21 @@ export function composeOcrProvider(env: Env = process.env): OcrProvider {
 }
 
 /** A session guard: asserts the caller is the authenticated accountant. */
-export type AuthGuard = (request?: unknown) => void;
+export type AuthGuard = () => Promise<void>;
 
-/** Builds the selected auth guard. `real` = fail-closed deny-all; `test` = stub. */
-export function composeAuthGuard(env: Env = process.env): AuthGuard {
+/**
+ * Builds the selected auth guard. `real` = the fail-closed session seam
+ * (resolves the real NextAuth session); `test` = no-op stub (demo only). An
+ * injectable resolver lets tests exercise the deny/allow behaviour without a
+ * Next.js request runtime.
+ */
+export function composeAuthGuard(
+  env: Env = process.env,
+  resolve?: SessionResolver,
+): AuthGuard {
   const mode = selectAuthMode(env);
   if (mode === "test") {
-    return () => {};
+    return async () => {};
   }
-  // The production seam ignores its request arg; pass a dummy for the type.
-  return (request?: unknown) => requireAccountantSession(request as Request);
+  return () => requireAccountantSession(resolve);
 }

@@ -46,7 +46,7 @@ export default async function ReviewPage() {
                     // The approve/emit ACTION is enforced server-side (domain
                     // guard + the approve route); the client-side button is
                     // intentionally disabled until the UI is wired to POST to
-                    // the approve route. This IS slice 4 — the pipeline exists.
+                    // the approve route.
                     <button disabled title="Approve/emit UI wiring pending">
                       Approve
                     </button>

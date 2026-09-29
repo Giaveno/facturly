@@ -74,14 +74,22 @@ describe("composition — env-gated driver selection", () => {
   });
 
   describe("auth seam", () => {
-    it("STILL denies by default (real mode is fail-closed)", () => {
-      const guard = composeAuthGuard({ AUTH_MODE: "real" });
-      expect(() => guard()).toThrow(UnauthorizedError);
+    it("real mode DENIES without a session (fail-closed)", async () => {
+      const guard = composeAuthGuard({ AUTH_MODE: "real" }, async () => null);
+      await expect(guard()).rejects.toThrow(UnauthorizedError);
     });
 
-    it("test mode injects a stub session (no denial)", () => {
+    it("real mode ALLOWS with a session", async () => {
+      const guard = composeAuthGuard(
+        { AUTH_MODE: "real" },
+        async () => ({ user: { email: "a@b.c" } }),
+      );
+      await expect(guard()).resolves.toBeUndefined();
+    });
+
+    it("test mode injects a stub session (no denial)", async () => {
       const guard = composeAuthGuard({ AUTH_MODE: "test" });
-      expect(() => guard()).not.toThrow();
+      await expect(guard()).resolves.toBeUndefined();
     });
   });
 });

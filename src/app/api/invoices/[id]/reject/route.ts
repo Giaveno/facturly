@@ -34,9 +34,10 @@ export async function POST(
     return errorJson(400, "Invalid invoice id", correlationId);
   }
 
-  // C6: the single centralized enforcement point — fail-closed until NextAuth.
+  // C6: the single centralized enforcement point — fail-closed: denies unless
+  // the REAL NextAuth session has a user.
   try {
-    requireAccountantSession(req);
+    await requireAccountantSession();
   } catch (err) {
     if (isUnauthorizedError(err)) {
       return errorJson(401, "Authentication required", correlationId);

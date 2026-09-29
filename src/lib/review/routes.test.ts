@@ -43,7 +43,7 @@ describe("invoice approve/reject routes — W5, C6, W4, C4", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Fail-closed default: the auth seam denies.
-    vi.mocked(requireAccountantSession).mockImplementation(() => {
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {
       throw new UnauthorizedError();
     });
     // No DATABASE_URL in tests → getDb throws, simulating a DB failure.
@@ -81,7 +81,7 @@ describe("invoice approve/reject routes — W5, C6, W4, C4", () => {
   });
 
   it("W4: approve returns an opaque 500 and never leaks internal error text", async () => {
-    vi.mocked(requireAccountantSession).mockImplementation(() => {});
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {});
     const res = await approvePOST(req(), params(VALID_UUID));
     expect(res.status).toBe(500);
     const body = await res.json();
@@ -91,7 +91,7 @@ describe("invoice approve/reject routes — W5, C6, W4, C4", () => {
   });
 
   it("W4: reject returns an opaque 500 and never leaks internal error text", async () => {
-    vi.mocked(requireAccountantSession).mockImplementation(() => {});
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {});
     const res = await rejectPOST(
       req(JSON.stringify({ reason: "non-sale" })),
       params(VALID_UUID),
@@ -103,7 +103,7 @@ describe("invoice approve/reject routes — W5, C6, W4, C4", () => {
   });
 
   it("C4: a successful approve sends the emit event with idempotencyKey = invoice id", async () => {
-    vi.mocked(requireAccountantSession).mockImplementation(() => {});
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {});
     vi.mocked(getDb).mockReturnValue({} as never);
     vi.mocked(buildArcaGateway).mockReturnValue({} as never);
     vi.mocked(approveInvoice).mockResolvedValue({
@@ -123,7 +123,7 @@ describe("invoice approve/reject routes — W5, C6, W4, C4", () => {
   });
 
   it("C4: a successful reject does NOT emit", async () => {
-    vi.mocked(requireAccountantSession).mockImplementation(() => {});
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {});
     vi.mocked(getDb).mockReturnValue({} as never);
     vi.mocked(rejectInvoice).mockResolvedValue({
       id: VALID_UUID,

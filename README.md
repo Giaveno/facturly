@@ -22,6 +22,7 @@ flow runs end-to-end with **no credentials and no network** via `pnpm demo`.
 | `pnpm db:generate`      | Emit a new Drizzle migration from the schema              |
 | `pnpm db:migrate`       | Apply pending migrations to `DATABASE_URL`                |
 | `pnpm db:push`          | Push the schema directly (dev only)                       |
+| `pnpm db:seed`          | Create/update the single accountant from env vars         |
 | `pnpm homologacion:spike` | Manual pre-apply gate vs ARCA homologación (needs creds) |
 
 ## Demo mode (offline) — env vars
@@ -37,3 +38,35 @@ test auth in a production build. Defaults are always the safe production values.
 | `ARCA_ADAPTER`    | `prod`       | `fake`          | Real WSAA/WSFEv1 vs in-memory fake   |
 | `OCR_ADAPTER`     | `prod`       | `fake`          | (not wired yet) vs in-memory fake    |
 | `AUTH_MODE`       | `real`       | `test`          | Fail-closed deny-all vs stub session |
+
+## Authentication (single accountant)
+
+Login uses NextAuth v5 (credentials provider) against the `accountant` table.
+
+1. Set `AUTH_SECRET` (required in production — no fallback): `openssl rand -base64 32`.
+2. Seed the accountant:
+   ```bash
+   ACCOUNTANT_EMAIL=contador@example.com \
+   ACCOUNTANT_PASSWORD='a-strong-password' \
+   pnpm db:seed
+   ```
+3. `pnpm dev`, then open `/login` and sign in. The password is bcrypt-hashed
+   (never stored or logged in plaintext).
+
+The app shell (Upload / Review / Invoices / Clients) and the app API routes are
+protected by `src/middleware.ts`; unauthenticated page requests redirect to
+`/login`, unauthenticated API requests get a 401. NextAuth's own routes
+(`/api/auth`) and the Inngest endpoint (`/api/inngest`) are exempt.
+
+## Inngest (background jobs)
+
+The emission, OCR, and lost-CAE recovery jobs are served at `/api/inngest`.
+That endpoint verifies Inngest webhook signatures, so it needs
+`INNGEST_SIGNING_KEY` (from the Inngest dashboard) in the environment.
+
+- **`INNGEST_SIGNING_KEY` is REQUIRED in production** — the app refuses to start
+  without it.
+- **`INNGEST_DEV` must NEVER be set in production.** It switches Inngest into dev
+  mode and disables signature verification entirely, which would let the emission
+  (real invoices) and OCR endpoints execute unverified webhooks. It is refused at
+  startup when `NODE_ENV=production`.
