@@ -28,10 +28,14 @@ import { POST as rejectPOST } from "@/app/api/invoices/[id]/reject/route";
 
 const VALID_UUID = "00000000-0000-4000-8000-000000000000";
 
-function req(body?: string): Request {
-  return new Request("http://test/api", {
+function req(body?: string, init?: { origin?: string }): Request {
+  const headers = new Headers();
+  headers.set("host", "app.example.com");
+  if (init?.origin) headers.set("origin", init.origin);
+  return new Request("http://app.example.com/api", {
     method: "POST",
     body,
+    headers,
   });
 }
 
@@ -73,6 +77,41 @@ describe("invoice approve/reject routes — W5, C6, W4, C4", () => {
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.error).toBe("Authentication required");
+  });
+
+  it("W2: approve rejects a cross-origin request with 403 BEFORE auth", async () => {
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {});
+    const res = await approvePOST(
+      req(undefined, { origin: "https://evil.example.net" }),
+      params(VALID_UUID),
+    );
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toBe("Cross-origin request rejected");
+    expect(requireAccountantSession).not.toHaveBeenCalled();
+    expect(getDb).not.toHaveBeenCalled();
+  });
+
+  it("W2: a same-origin approve passes the origin gate (reaches auth)", async () => {
+    const res = await approvePOST(
+      req(undefined, { origin: "https://app.example.com" }),
+      params(VALID_UUID),
+    );
+    // NOT 403 — the origin gate passed; the next gate (auth) denied → 401.
+    expect(res.status).toBe(401);
+    expect(requireAccountantSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("W2: reject rejects a cross-origin request with 403 BEFORE auth", async () => {
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {});
+    const res = await rejectPOST(
+      req(JSON.stringify({ reason: "non-sale" }), {
+        origin: "https://evil.example.net",
+      }),
+      params(VALID_UUID),
+    );
+    expect(res.status).toBe(403);
+    expect(requireAccountantSession).not.toHaveBeenCalled();
   });
 
   it("C6: reject rejects with 401 when the auth seam denies", async () => {

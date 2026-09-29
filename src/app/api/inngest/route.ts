@@ -1,5 +1,6 @@
-import { serve } from "inngest/next";
+import { serve, type RequestHandler } from "inngest/next";
 import { inngest } from "@/lib/inngest/client";
+import { resolveInngestSigningKey } from "@/lib/inngest/config";
 import { emitBatchJob } from "@/jobs/emit";
 import { processOcrRowJob } from "@/jobs/ocr";
 import { recoverStuckEmissionsJob } from "@/jobs/recover";
@@ -15,7 +16,25 @@ import { recoverStuckEmissionsJob } from "@/jobs/recover";
  * exercised in the offline suite (they require the Inngest platform / dev
  * server).
  */
-export const { GET, POST, PUT } = serve({
+const inngestHandlers = serve({
   client: inngest,
   functions: [emitBatchJob, processOcrRowJob, recoverStuckEmissionsJob],
 });
+
+/**
+ * Wraps each Inngest handler with a production assertion that refuses (throws)
+ * when the endpoint is misconfigured: `INNGEST_SIGNING_KEY` missing, or
+ * `INNGEST_DEV` set (which disables signature verification). It runs at REQUEST
+ * time, not module load, because route modules are evaluated during
+ * `next build` where the key is not present.
+ */
+function guard(handler: RequestHandler): RequestHandler {
+  return async (req, res) => {
+    resolveInngestSigningKey();
+    return handler(req, res);
+  };
+}
+
+export const GET = guard(inngestHandlers.GET);
+export const POST = guard(inngestHandlers.POST);
+export const PUT = guard(inngestHandlers.PUT);
