@@ -24,6 +24,9 @@ yarn.lock
 /blob-report/
 /playwright/.cache/
 
+# demo output (generated PDFs/Excel from `pnpm demo`)
+/demo-output/
+
 # env files (keep the example committed)
 .env*
 !.env.example
