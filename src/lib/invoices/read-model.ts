@@ -9,7 +9,7 @@
  * invoice has a real CAE (and is otherwise fully materialized).
  */
 
-import { eq } from "drizzle-orm";
+import { eq, isNotNull } from "drizzle-orm";
 import { clients, invoices, issuedInvoices } from "@/lib/db/schema";
 import type { InvoicePdfInput } from "@/pdf/render";
 import type { CbteTipo } from "@/domain/policy";
@@ -26,7 +26,12 @@ export interface IssuedInvoiceRow {
   importeTotalCentavos: number | null;
 }
 
-/** Lists issued-invoice rows (including in-flight reservations with a NULL CAE). */
+/**
+ * Lists genuinely issued invoices — only rows that actually have a CAE. A
+ * NULL-CAE reservation (emission in flight, or stuck in EMIT_ERROR) is NOT an
+ * issued invoice and MUST NOT appear here; it belongs to a different surface
+ * (or nowhere), never silently presented as issued.
+ */
 export async function listIssuedInvoices(db: Db): Promise<IssuedInvoiceRow[]> {
   return db
     .select({
@@ -41,6 +46,7 @@ export async function listIssuedInvoices(db: Db): Promise<IssuedInvoiceRow[]> {
     .from(issuedInvoices)
     .innerJoin(invoices, eq(issuedInvoices.invoiceId, invoices.id))
     .innerJoin(clients, eq(invoices.clientId, clients.id))
+    .where(isNotNull(issuedInvoices.cae))
     .orderBy(issuedInvoices.createdAt);
 }
 

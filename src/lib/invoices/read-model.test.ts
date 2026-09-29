@@ -15,7 +15,9 @@ import type { Db } from "@/lib/db/types";
 /**
  * Invoices read-model — the queries behind the Invoices page and the PDF
  * download route. The critical guarantee tested here: a NULL-CAE reservation is
- * NOT a downloadable issued invoice (loadIssuedInvoicePdfInput returns null).
+ * NOT a downloadable issued invoice (loadIssuedInvoicePdfInput returns null) AND
+ * is EXCLUDED from the issued-invoices list (listIssuedInvoices filters on
+ * `cae IS NOT NULL`). An unissued invoice is not an issued invoice.
  */
 describe("invoices read-model", () => {
   let db: Db;
@@ -49,7 +51,13 @@ describe("invoices read-model", () => {
     await close();
   });
 
-  async function seedIssued({ cae }: { cae: string | null }) {
+  async function seedIssued({
+    cae,
+    cbteNro = 1,
+  }: {
+    cae: string | null;
+    cbteNro?: number;
+  }) {
     const [batch] = await db.insert(batches).values({ clientId }).returning();
     const [photo] = await db
       .insert(photos)
@@ -89,7 +97,7 @@ describe("invoices read-model", () => {
       cuit: "20123456789",
       ptoVta: 1,
       cbteTipo: 1,
-      cbteNro: 1,
+      cbteNro,
       cae,
       caeFchVto: cae ? "2026-10-02" : null,
       importeTotalCentavos: 121000,
@@ -125,15 +133,25 @@ describe("invoices read-model", () => {
     expect(input!.importeTotal).toBe(121000);
   });
 
-  it("returns null for a NULL-CAE reservation (NOT an issued invoice)", async () => {
+  it("excludes a NULL-CAE reservation from the issued list (and still refuses the PDF)", async () => {
     const invoiceId = await seedIssued({ cae: null });
 
-    // The reservation still appears in the list (it has a number + amount)…
+    // A reservation (emission in flight / EMIT_ERROR) is NOT an issued invoice:
+    // it MUST NOT appear in the issued-invoices list.
     const rows = await listIssuedInvoices(db);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.cae).toBeNull();
-    // …but the PDF route MUST refuse it.
+    expect(rows).toHaveLength(0);
+    // …and the PDF route MUST still refuse it.
     await expect(loadIssuedInvoicePdfInput(db, invoiceId)).resolves.toBeNull();
+  });
+
+  it("lists an emitted invoice and excludes a NULL-CAE reservation alongside it", async () => {
+    await seedIssued({ cae: "70000000000002", cbteNro: 2 });
+    await seedIssued({ cae: null, cbteNro: 3 });
+
+    const rows = await listIssuedInvoices(db);
+    // Only the genuinely-issued invoice (with a CAE) is listed.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.cae).toBe("70000000000002");
   });
 
   it("returns null for an unknown invoice id", async () => {
