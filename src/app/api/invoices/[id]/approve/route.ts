@@ -8,6 +8,10 @@ import {
   isUnauthorizedError,
   requireAccountantSession,
 } from "@/lib/auth/session";
+import {
+  assertSameOrigin,
+  isForbiddenOriginError,
+} from "@/lib/auth/origin";
 import { inngest } from "@/lib/inngest/client";
 
 function errorJson(status: number, message: string, correlationId: string) {
@@ -36,6 +40,17 @@ export async function POST(
   // DB round-trip.
   if (!isUuid(id)) {
     return errorJson(400, "Invalid invoice id", correlationId);
+  }
+
+  // W2: same-origin (CSRF) check — a browser request whose Origin is not this
+  // app is rejected (approve triggers a REAL ARCA emission).
+  try {
+    assertSameOrigin(req);
+  } catch (err) {
+    if (isForbiddenOriginError(err)) {
+      return errorJson(403, "Cross-origin request rejected", correlationId);
+    }
+    throw err;
   }
 
   // C6: the single centralized enforcement point — fail-closed: denies unless

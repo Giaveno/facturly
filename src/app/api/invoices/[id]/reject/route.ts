@@ -7,6 +7,10 @@ import {
   isUnauthorizedError,
   requireAccountantSession,
 } from "@/lib/auth/session";
+import {
+  assertSameOrigin,
+  isForbiddenOriginError,
+} from "@/lib/auth/origin";
 
 function errorJson(status: number, message: string, correlationId: string) {
   return NextResponse.json({ error: message, correlationId }, { status });
@@ -32,6 +36,16 @@ export async function POST(
   // DB round-trip.
   if (!isUuid(id)) {
     return errorJson(400, "Invalid invoice id", correlationId);
+  }
+
+  // W2: same-origin (CSRF) check.
+  try {
+    assertSameOrigin(req);
+  } catch (err) {
+    if (isForbiddenOriginError(err)) {
+      return errorJson(403, "Cross-origin request rejected", correlationId);
+    }
+    throw err;
   }
 
   // C6: the single centralized enforcement point — fail-closed: denies unless

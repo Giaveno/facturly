@@ -5,6 +5,14 @@ import { classifyDbError } from "@/lib/db/errors";
 import { queueUpload } from "@/lib/pipeline/ingest";
 import { inngest } from "@/lib/inngest/client";
 import {
+  isUnauthorizedError,
+  requireAccountantSession,
+} from "@/lib/auth/session";
+import {
+  assertSameOrigin,
+  isForbiddenOriginError,
+} from "@/lib/auth/origin";
+import {
   MAX_TOTAL_BYTES,
   isUuid,
   validateUploadPhotos,
@@ -42,6 +50,27 @@ export async function POST(req: Request): Promise<Response> {
         "Upload exceeds the total size limit",
         correlationId,
       );
+    }
+
+    // W2: same-origin (CSRF) check — the upload costs OCR money and writes rows.
+    try {
+      assertSameOrigin(req);
+    } catch (err) {
+      if (isForbiddenOriginError(err)) {
+        return errorJson(403, "Cross-origin request rejected", correlationId);
+      }
+      throw err;
+    }
+
+    // C6: server-side auth — the middleware matcher is NOT the enforcement
+    // point; this route must deny on its own even if the matcher ever regresses.
+    try {
+      await requireAccountantSession();
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        return errorJson(401, "Authentication required", correlationId);
+      }
+      throw err;
     }
 
     const form = await req.formData();
