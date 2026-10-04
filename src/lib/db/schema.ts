@@ -273,23 +273,45 @@ export const auditLog = pgTable("audit_log", {
 });
 
 /** Per-client wsfe delegation authorizations. */
-export const delegations = pgTable("delegations", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  clientId: uuid("client_id")
-    .notNull()
-    .references(() => clients.id),
-  cuit: text("cuit").notNull(),
-  enabled: boolean("enabled").notNull().default(true),
-});
+export const delegations = pgTable(
+  "delegations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id),
+    cuit: text("cuit").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+  },
+  (table) => [
+    // A client has AT MOST ONE delegation row. Without this, concurrent
+    // enable/disable on a zero-row client (or any future stray insert) can
+    // create TWO rows and the emission service's `some(enabled)` guard would be
+    // satisfied by whichever arbitrary row the DB returns (W3).
+    uniqueIndex("delegations_client_unique").on(table.clientId),
+  ],
+);
+
+/** The single-row key for the `credentials` table (one global credential). */
+export const CREDENTIALS_SCOPE = "singleton";
 
 /** The accountant's encrypted ARCA X.509 certificate + key (AES-256-GCM). */
-export const credentials = pgTable("credentials", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  certPem: text("cert_pem").notNull(),
-  keyCiphertext: text("key_ciphertext").notNull(),
-  iv: text("iv").notNull(),
-  authTag: text("auth_tag").notNull(),
-});
+export const credentials = pgTable(
+  "credentials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Constant scope column whose unique index enforces the single-row
+    // invariant at the DB (a concurrent upload can never insert a second row).
+    scope: text("scope").notNull().default(CREDENTIALS_SCOPE),
+    certPem: text("cert_pem").notNull(),
+    keyCiphertext: text("key_ciphertext").notNull(),
+    iv: text("iv").notNull(),
+    authTag: text("auth_tag").notNull(),
+  },
+  (table) => [
+    uniqueIndex("credentials_singleton_unique").on(table.scope),
+  ],
+);
 
 /**
  * WSAA ticket cache — one row per ARCA service (`wsfe`, `ws_sr_constancia_inscripcion`).

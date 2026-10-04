@@ -5,6 +5,8 @@ import {
   auditLog,
   batches,
   clients,
+  credentials,
+  delegations,
   invoices,
   issuedInvoices,
   ocrRows,
@@ -39,6 +41,8 @@ describe("schema guarantees", () => {
     await db.delete(photos);
     await db.delete(batches);
     await db.delete(payers);
+    await db.delete(delegations);
+    await db.delete(credentials);
     await db.delete(clients);
   });
 
@@ -123,5 +127,30 @@ describe("schema guarantees", () => {
     };
     await db.insert(clients).values(base);
     await expect(db.insert(clients).values(base)).rejects.toThrow();
+  });
+
+  it("rejects a second delegation row for the same client (UNIQUE index)", async () => {
+    const [client] = await db
+      .insert(clients)
+      .values({ cuit: "30710145764", razonSocial: "UNICO S.A.", ptoVta: 1, condicionIva: "ri" })
+      .returning();
+
+    await db
+      .insert(delegations)
+      .values({ clientId: client!.id, cuit: "30710145764", enabled: true });
+    await expect(
+      db.insert(delegations).values({ clientId: client!.id, cuit: "30710145764", enabled: false }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects a second credentials row on the singleton scope (UNIQUE index)", async () => {
+    const row = {
+      certPem: "-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----",
+      keyCiphertext: "AA==",
+      iv: "AAAAAAAAAAAAAAAAAAAAAA==",
+      authTag: "AAAAAAAAAAAAAAAAAAAAAA==",
+    };
+    await db.insert(credentials).values(row);
+    await expect(db.insert(credentials).values(row)).rejects.toThrow();
   });
 });
