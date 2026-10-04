@@ -47,6 +47,7 @@ import {
   type CondicionIVA,
 } from "@/domain/policy";
 import { formatCentavos } from "@/domain/money";
+import { isValidCuit } from "@/domain/cuit";
 import {
   clients,
   delegations,
@@ -62,11 +63,20 @@ const FIXED_NOW = () => new Date("2026-09-22T12:00:00.000Z");
 
 /** The demo's client company (an RI emisor). */
 const CLIENT = {
-  cuit: "20123456789",
+  cuit: "20123456786",
   razonSocial: "ESTUDIO CONTABLE DEL SUR S.A.",
   ptoVta: 1,
   condicionIva: "ri" as const,
 };
+
+// The demo stamps this CUIT onto real emitted invoices — it MUST pass the
+// product's own Mod-11 validator, or every emission is a fiscal document with
+// an invalid emisor CUIT (W4). Fail the demo loudly if it ever regresses.
+if (!isValidCuit(CLIENT.cuit)) {
+  throw new Error(
+    `demo client CUIT "${CLIENT.cuit}" is not Mod-11 valid — the demo cannot emit`,
+  );
+}
 
 /** Fake Padrón A5 conditions — which CUIT resolves to which IVA condition. */
 const CONDITIONS: ReadonlyMap<string, CondicionIVA> = new Map([

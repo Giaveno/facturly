@@ -4,6 +4,7 @@ import {
   collectAllowedOrigins,
   ForbiddenOriginError,
   isForbiddenOriginError,
+  OriginConfigurationError,
 } from "./origin";
 
 /**
@@ -41,6 +42,28 @@ describe("collectAllowedOrigins", () => {
     expect(allowed.has("https://b.example.com")).toBe(true);
     // Normalization strips trailing slashes and lowercases.
     expect(allowed.has("https://B.example.com/")).toBe(false);
+  });
+
+  it("production: refuses to build the allowlist without APP_ORIGIN (W7)", () => {
+    const r = new Request("http://example.invalid/", {
+      headers: { host: "app.example.com" },
+    });
+    expect(() =>
+      collectAllowedOrigins(r, { NODE_ENV: "production" }),
+    ).toThrow(OriginConfigurationError);
+  });
+
+  it("production: ignores the request Host and uses only APP_ORIGIN (W7)", () => {
+    // A forged Host + Origin pair must NOT be able to pass in production.
+    const r = new Request("http://example.invalid/", {
+      headers: { host: "evil.example.net", origin: "https://evil.example.net" },
+    });
+    const allowed = collectAllowedOrigins(r, {
+      NODE_ENV: "production",
+      APP_ORIGIN: "https://app.example.com",
+    });
+    expect(allowed.has("https://app.example.com")).toBe(true);
+    expect(allowed.has("https://evil.example.net")).toBe(false);
   });
 });
 

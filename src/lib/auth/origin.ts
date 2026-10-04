@@ -16,6 +16,7 @@
 /** The subset of `process.env` the allowlist reads. */
 export interface OriginEnv {
   APP_ORIGIN?: string;
+  NODE_ENV?: string;
   [key: string]: string | undefined;
 }
 
@@ -26,21 +27,39 @@ function normalizeOrigin(origin: string): string {
   return o;
 }
 
+/** Thrown when the allowlist cannot be built (mapped to a loud startup failure). */
+export class OriginConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OriginConfigurationError";
+  }
+}
+
 /**
  * The allowlist for a request: the request's own origin (scheme + host) plus any
  * explicitly configured origins in `APP_ORIGIN` (comma-separated). Behind a
  * proxy the scheme is read from `x-forwarded-proto` (defaults to `https`).
+ *
+ * In production (`NODE_ENV === "production"`) the request `Host` is IGNORED —
+ * a forged `Host`+`Origin` pair must not be able to pass — and `APP_ORIGIN` is
+ * REQUIRED. If it is missing, the allowlist refuses to build (loud failure)
+ * rather than silently deriving a permissive allowlist from the request (W7).
  */
 export function collectAllowedOrigins(
   req: Request,
   env: OriginEnv = process.env,
 ): Set<string> {
   const allowed = new Set<string>();
-  const host = req.headers.get("host");
-  if (host) {
-    const proto = req.headers.get("x-forwarded-proto") ?? "https";
-    allowed.add(normalizeOrigin(`${proto}://${host}`));
+  const isProduction = env.NODE_ENV === "production";
+
+  if (!isProduction) {
+    const host = req.headers.get("host");
+    if (host) {
+      const proto = req.headers.get("x-forwarded-proto") ?? "https";
+      allowed.add(normalizeOrigin(`${proto}://${host}`));
+    }
   }
+
   const appOrigin = (env.APP_ORIGIN ?? "").trim();
   if (appOrigin) {
     for (const part of appOrigin.split(",")) {
@@ -48,6 +67,13 @@ export function collectAllowedOrigins(
       if (o) allowed.add(normalizeOrigin(o));
     }
   }
+
+  if (isProduction && allowed.size === 0) {
+    throw new OriginConfigurationError(
+      "APP_ORIGIN must be set in production — refusing to derive the origin allowlist from the request Host",
+    );
+  }
+
   return allowed;
 }
 

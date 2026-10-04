@@ -60,12 +60,18 @@ describe("middleware matcher ↔ isExemptPath agreement", () => {
     "/review",
     "/invoices",
     "/clients",
+    "/credentials",
     "/api/upload",
+    "/api/clients",
+    "/api/credentials",
+    "/api/rows/00000000-0000-4000-8000-000000000000/resolve-payer",
+    "/api/clients/00000000-0000-4000-8000-000000000000/delegation",
     // NOT NextAuth routes — the narrowed exemption must NOT let these through.
     "/api/authz",
     "/api/authentication",
     "/api/invoices/00000000-0000-4000-8000-000000000000/pdf",
     "/api/invoices/00000000-0000-4000-8000-000000000000/approve",
+    "/api/invoices/00000000-0000-4000-8000-000000000000/review",
   ];
 
   it("never lets the matcher skip a path the policy would protect", () => {

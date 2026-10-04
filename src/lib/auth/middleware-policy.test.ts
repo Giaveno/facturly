@@ -30,13 +30,19 @@ describe("isExemptPath — routes the middleware must never block", () => {
     "/review",
     "/invoices",
     "/clients",
+    "/credentials",
     "/api/upload",
+    "/api/clients",
+    "/api/credentials",
+    "/api/rows/00000000-0000-4000-8000-000000000000/resolve-payer",
+    "/api/clients/00000000-0000-4000-8000-000000000000/delegation",
     // NOT NextAuth routes — a prefix match must NOT exempt these.
     "/api/authz",
     "/api/authentication",
     "/api/authx/whatever",
     "/api/invoices/00000000-0000-4000-8000-000000000000/pdf",
     "/api/invoices/00000000-0000-4000-8000-000000000000/approve",
+    "/api/invoices/00000000-0000-4000-8000-000000000000/review",
   ])("does NOT exempt %s (protected)", (pathname) => {
     expect(isExemptPath(pathname)).toBe(false);
   });

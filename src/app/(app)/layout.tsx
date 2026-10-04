@@ -20,7 +20,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         <Link href="/">Upload</Link>{" "}
         <Link href="/review">Review</Link>{" "}
         <Link href="/invoices">Invoices</Link>{" "}
-        <Link href="/clients">Clients</Link>
+        <Link href="/clients">Clients</Link>{" "}
+        <Link href="/credentials">Credentials</Link>
       </nav>
       <div>
         {email ? <span>{email}</span> : null} <LogoutButton />
