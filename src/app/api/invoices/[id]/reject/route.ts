@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db/client";
-import { rejectInvoice } from "@/lib/review/workflow";
+import {
+  DiscardReasonError,
+  InvoiceStateError,
+  rejectInvoice,
+} from "@/lib/review/workflow";
 import { isUuid } from "@/lib/upload/guard";
 import {
   isUnauthorizedError,
@@ -71,6 +75,12 @@ export async function POST(
     const result = await rejectInvoice(getDb(), id, reason);
     return NextResponse.json(result);
   } catch (err) {
+    if (err instanceof DiscardReasonError) {
+      return errorJson(400, "A valid discard reason is required", correlationId);
+    }
+    if (err instanceof InvoiceStateError) {
+      return errorJson(409, "This invoice cannot be discarded", correlationId);
+    }
     console.error(`[reject] ${correlationId} failed`, err);
     return errorJson(500, "Rejection failed", correlationId);
   }

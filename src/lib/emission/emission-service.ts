@@ -43,6 +43,7 @@ import {
 } from "@/domain/emission";
 import { InvoiceStateError, loadInvoiceContext } from "@/lib/review/workflow";
 import { writeAudit } from "@/lib/audit/audit";
+import { isUniqueViolation } from "@/lib/db/errors";
 import type {
   ArcaGateway,
   FECAEReq,
@@ -180,23 +181,6 @@ export function buildFecaReq(
     importeIva: invoice.importeIvaCentavos ?? 0,
     importeTotal: invoice.importeTotalCentavos ?? 0,
   };
-}
-
-/** Detects a Postgres/PGlite unique-violation (code 23505), walking the error
- * `.cause` chain — Drizzle wraps the driver error in `DrizzleQueryError`, which
- * carries the real `code`/`message` under `.cause`. */
-function isUniqueViolation(err: unknown): boolean {
-  let e: unknown = err;
-  while (e && typeof e === "object") {
-    const obj = e as { code?: string; message?: string; cause?: unknown };
-    if (obj.code === "23505") return true;
-    const msg = obj.message ?? "";
-    if (/duplicate key value|unique constraint|unique_violation/i.test(msg)) {
-      return true;
-    }
-    e = obj.cause;
-  }
-  return false;
 }
 
 /**

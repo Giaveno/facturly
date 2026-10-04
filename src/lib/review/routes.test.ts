@@ -12,6 +12,8 @@ vi.mock("@/lib/emission/gateway", () => ({ buildArcaGateway: vi.fn() }));
 vi.mock("@/lib/review/workflow", () => ({
   approveInvoice: vi.fn(),
   rejectInvoice: vi.fn(),
+  InvoiceStateError: class InvoiceStateError extends Error {},
+  DiscardReasonError: class DiscardReasonError extends Error {},
 }));
 vi.mock("@/lib/inngest/client", () => ({ inngest: { send: vi.fn() } }));
 
@@ -21,7 +23,12 @@ import {
 } from "@/lib/auth/session";
 import { getDb } from "@/lib/db/client";
 import { buildArcaGateway } from "@/lib/emission/gateway";
-import { approveInvoice, rejectInvoice } from "@/lib/review/workflow";
+import {
+  approveInvoice,
+  DiscardReasonError,
+  InvoiceStateError,
+  rejectInvoice,
+} from "@/lib/review/workflow";
 import { inngest } from "@/lib/inngest/client";
 import { POST as approvePOST } from "@/app/api/invoices/[id]/approve/route";
 import { POST as rejectPOST } from "@/app/api/invoices/[id]/reject/route";
@@ -176,5 +183,33 @@ describe("invoice approve/reject routes — W5, C6, W4, C4", () => {
     );
     expect(res.status).toBe(200);
     expect(inngest.send).not.toHaveBeenCalled();
+  });
+
+  it("approve maps an InvoiceStateError (wrong state) to 409, not 500 (W8)", async () => {
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {});
+    vi.mocked(getDb).mockReturnValue({} as never);
+    vi.mocked(buildArcaGateway).mockReturnValue({} as never);
+    vi.mocked(approveInvoice).mockRejectedValue(new InvoiceStateError(VALID_UUID, "REVIEWED", "approve", "wrong state"));
+
+    const res = await approvePOST(req(), params(VALID_UUID));
+    expect(res.status).toBe(409);
+  });
+
+  it("reject maps an InvoiceStateError (wrong state) to 409, not 500 (W8)", async () => {
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {});
+    vi.mocked(getDb).mockReturnValue({} as never);
+    vi.mocked(rejectInvoice).mockRejectedValue(new InvoiceStateError(VALID_UUID, "APPROVED", "reject", "wrong state"));
+
+    const res = await rejectPOST(req(JSON.stringify({ reason: "x" })), params(VALID_UUID));
+    expect(res.status).toBe(409);
+  });
+
+  it("reject maps a DiscardReasonError (empty/too-long reason) to 400, not 500 (W8)", async () => {
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {});
+    vi.mocked(getDb).mockReturnValue({} as never);
+    vi.mocked(rejectInvoice).mockRejectedValue(new DiscardReasonError("a discard reason is required"));
+
+    const res = await rejectPOST(req(JSON.stringify({ reason: "" })), params(VALID_UUID));
+    expect(res.status).toBe(400);
   });
 });

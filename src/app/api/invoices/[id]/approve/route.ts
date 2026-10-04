@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db/client";
-import { approveInvoice } from "@/lib/review/workflow";
+import { approveInvoice, InvoiceStateError } from "@/lib/review/workflow";
 import { buildArcaGateway } from "@/lib/emission/gateway";
 import { isUuid } from "@/lib/upload/guard";
 import {
@@ -75,6 +75,9 @@ export async function POST(
     });
     return NextResponse.json({ id: approved.id, status: approved.status });
   } catch (err) {
+    if (err instanceof InvoiceStateError) {
+      return errorJson(409, "Invoice is not in an approvable state", correlationId);
+    }
     console.error(`[approve] ${correlationId} failed`, err);
     return errorJson(500, "Approval failed", correlationId);
   }

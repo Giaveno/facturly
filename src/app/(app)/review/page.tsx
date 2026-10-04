@@ -1,18 +1,20 @@
 import Link from "next/link";
 import { getDb } from "@/lib/db/client";
-import { listReviewRows } from "@/lib/review/read-model";
+import { listReviewInvoices } from "@/lib/review/read-model";
 import { formatCentavos } from "@/domain/money";
+import ReviewActions from "./review-actions";
 
 /**
- * Review page (skeleton). Lists OCR rows joined to their client. A BLOCKED row
- * is visibly marked and its approve action is disabled (unapprovable) — but the
- * disabled button is a HINT only. The real "a BLOCKED row can never emit"
- * guarantee is enforced server-side by `@/domain/emission`.
+ * Review page. Lists OCR rows joined to their client, with the materialized
+ * invoice status and the accountant's actions (confirm / approve / reject /
+ * resolve payer CUIT). A BLOCKED row is visibly marked and its approve action is
+ * hidden — but the real "a BLOCKED row can never emit" guarantee is enforced
+ * server-side by `@/domain/emission` and the approve route.
  */
 export const dynamic = "force-dynamic";
 
 export default async function ReviewPage() {
-  const rows = await listReviewRows(getDb());
+  const rows = await listReviewInvoices(getDb());
 
   return (
     <main>
@@ -36,21 +38,20 @@ export default async function ReviewPage() {
                 <td>{r.razonSocial}</td>
                 <td>{r.fields.name}</td>
                 <td>{formatCentavos(r.fields.amount)}</td>
-                <td>{r.status}</td>
                 <td>
-                  {r.blocked ? (
-                    <button disabled title="Correct the fields first">
-                      Blocked — cannot approve
-                    </button>
-                  ) : (
-                    // The approve/emit ACTION is enforced server-side (domain
-                    // guard + the approve route); the client-side button is
-                    // intentionally disabled until the UI is wired to POST to
-                    // the approve route.
-                    <button disabled title="Approve/emit UI wiring pending">
-                      Approve
-                    </button>
-                  )}
+                  {r.status}
+                  {r.invoiceStatus !== r.status ? ` / ${r.invoiceStatus}` : ""}
+                </td>
+                <td>
+                  <ReviewActions
+                    rowId={r.rowId}
+                    invoiceId={r.invoiceId}
+                    status={r.status}
+                    invoiceStatus={r.invoiceStatus}
+                    blocked={r.blocked}
+                    failed={r.failed}
+                    flagged={r.flagged}
+                  />
                 </td>
               </tr>
             ))}

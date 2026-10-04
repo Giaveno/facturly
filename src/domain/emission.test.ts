@@ -30,6 +30,11 @@ describe("emission guard — BLOCKED/REJECTED rows must never emit", () => {
     expect(isRowEmittable("PENDING")).toBe(false);
   });
 
+  it("rejects a FAILED row — a crashed extraction is never emittable (W7/C1)", () => {
+    expect(isRowEmittable("FAILED")).toBe(false);
+    expect(() => assertRowEmittable("FAILED")).toThrow(RowNotEmittableError);
+  });
+
   it("carries the offending status on the error", () => {
     try {
       assertRowEmittable("BLOCKED");

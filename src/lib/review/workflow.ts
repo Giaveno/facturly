@@ -48,6 +48,17 @@ export class InvoiceStateError extends Error {
   }
 }
 
+/** Thrown when a discard reason is missing or over-length (mapped to 400). */
+export class DiscardReasonError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "DiscardReasonError";
+  }
+}
+
+/** Upper bound for the discard reason (it lands in `discard_reason` + audit). */
+export const MAX_DISCARD_REASON_LENGTH = 500;
+
 /** A clock returning the current instant (injectable for determinism). */
 export type Clock = () => Date;
 
@@ -101,10 +112,14 @@ async function clientForRow(db: Db, rowId: string) {
 }
 
 /**
- * Materializes (or re-syncs) the invoice for an OCR row. Idempotent: repeated
- * calls return the existing row and re-derive its status from the row status,
- * so a BLOCKED row stays PENDING and a later CORRECTED row promotes its invoice
- * to REVIEWED.
+ * Materializes (or re-syncs) the invoice for an OCR row, promoting FORWARD only.
+ *
+ * Idempotent and non-regressing: it CREATES the invoice only when none exists,
+ * and it UPDATES the status only when the current invoice status is `PENDING`
+ * and the derived status is `REVIEWED` (the one legal forward transition a row
+ * correction can cause). It NEVER overwrites `APPROVED` / `EMITTING` / `EMITTED`
+ * / `EMIT_ERROR` / `EMIT_FAILED` / `REJECTED` — a page GET (or any caller) can
+ * no longer rewind fiscal state (C2).
  */
 export async function materializeInvoice(
   db: Db,
@@ -120,13 +135,19 @@ export async function materializeInvoice(
   const derived = invoiceStatusForRow(row.status);
 
   if (existing) {
-    if (existing.status !== derived) {
+    // Promote forward ONLY: PENDING → REVIEWED. A terminal/in-flight status
+    // (APPROVED, EMITTING, EMITTED, EMIT_ERROR, EMIT_FAILED, REJECTED) is
+    // returned untouched — never regressed back to PENDING/REVIEWED. Return the
+    // ACTUAL persisted status so callers never observe a status the DB does not
+    // hold.
+    if (existing.status === "PENDING" && derived === "REVIEWED") {
       await db
         .update(invoices)
-        .set({ status: derived })
+        .set({ status: "REVIEWED" })
         .where(eq(invoices.id, existing.id));
+      return { id: existing.id, status: "REVIEWED" };
     }
-    return { id: existing.id, status: derived };
+    return { id: existing.id, status: existing.status };
   }
 
   const clientId = await clientForRow(db, rowId);
@@ -312,11 +333,11 @@ export async function rejectInvoice(
   }
   const trimmed = reason.trim();
   if (trimmed === "") {
-    throw new InvoiceStateError(
-      invoiceId,
-      invoice.status,
-      "reject",
-      "a discard reason is required",
+    throw new DiscardReasonError("a discard reason is required");
+  }
+  if (trimmed.length > MAX_DISCARD_REASON_LENGTH) {
+    throw new DiscardReasonError(
+      `discard reason must be ${MAX_DISCARD_REASON_LENGTH} characters or fewer`,
     );
   }
 

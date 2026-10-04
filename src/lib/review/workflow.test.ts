@@ -15,10 +15,12 @@ import {
 import { ArcaGatewayFake } from "@/adapters/arca/arca-gateway.fake";
 import {
   approveInvoice,
+  DiscardReasonError,
   InvoiceStateError,
   loadInvoiceContext,
   markInvoiceReviewed,
   materializeInvoice,
+  MAX_DISCARD_REASON_LENGTH,
   rejectInvoice,
 } from "./workflow";
 import type { Db } from "@/lib/db/types";
@@ -204,7 +206,26 @@ describe("review workflow — invoice status machine (server-side)", () => {
   it("rejectInvoice requires a non-empty reason", async () => {
     const rowId = await seedRow("CONFIDENT", "30710145764");
     const inv = await materializeInvoice(db, rowId);
-    await expect(rejectInvoice(db, inv.id, "   ")).rejects.toThrow(InvoiceStateError);
+    await expect(rejectInvoice(db, inv.id, "   ")).rejects.toThrow(DiscardReasonError);
+  });
+
+  it("rejectInvoice bounds the discard reason length", async () => {
+    const rowId = await seedRow("CONFIDENT", "30710145764");
+    const inv = await materializeInvoice(db, rowId);
+    const tooLong = "x".repeat(MAX_DISCARD_REASON_LENGTH + 1);
+    await expect(rejectInvoice(db, inv.id, tooLong)).rejects.toThrow(DiscardReasonError);
+  });
+
+  it("materializeInvoice never regresses a terminal/in-flight status (C2)", async () => {
+    const rowId = await seedRow("CORRECTED", "30710145764");
+    const inv = await materializeInvoice(db, rowId); // REVIEWED
+
+    // Force the invoice into every terminal/in-flight state and re-materialize.
+    for (const terminal of ["APPROVED", "EMITTING", "EMITTED", "EMIT_ERROR", "EMIT_FAILED", "REJECTED"] as const) {
+      await db.update(invoices).set({ status: terminal }).where(eq(invoices.id, inv.id));
+      const re = await materializeInvoice(db, rowId);
+      expect(re.status).toBe(terminal); // the row is CORRECTED (⇒ REVIEWED), but must NOT regress
+    }
   });
 
   it("rejectInvoice refuses an already-approved invoice", async () => {
