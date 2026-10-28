@@ -41,6 +41,14 @@ import {
 import { sql } from "drizzle-orm";
 import type { OcrFields } from "../../ports/ocr-provider";
 
+/**
+ * Where a row's CUIT came from. Distinguishes a registry-resolved CUIT (read
+ * side, no human entry) from an OCR-extracted one and a manual correction, so
+ * the review UI can label "resolved from registry" instead of implying the
+ * accountant entered it.
+ */
+export type CuitSource = "ocr" | "registry" | "manual";
+
 export const ocrRowStatus = pgEnum("ocr_row_status", [
   "PENDING",
   "CONFIDENT",
@@ -149,21 +157,33 @@ export const photos = pgTable("photos", {
 });
 
 /** One OCR-extracted row per photo. */
-export const ocrRows = pgTable("ocr_rows", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  photoId: uuid("photo_id")
-    .notNull()
-    .references(() => photos.id),
-  fields: jsonb("fields").$type<OcrFields>().notNull(),
-  confidence: jsonb("confidence").$type<Record<string, number>>().notNull(),
-  // Checksum-validated CUIT, or null when absent (registry resolution).
-  cuit: text("cuit"),
-  status: ocrRowStatus("status").notNull().default("PENDING"),
-  // Set when a PENDING row's async OCR fails (status FAILED) — the reason the
-  // extraction crashed, surfaced to the accountant (W7).
-  error: text("error"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+export const ocrRows = pgTable(
+  "ocr_rows",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    photoId: uuid("photo_id")
+      .notNull()
+      .references(() => photos.id),
+    fields: jsonb("fields").$type<OcrFields>().notNull(),
+    confidence: jsonb("confidence").$type<Record<string, number>>().notNull(),
+    // Checksum-validated CUIT, or null when absent (registry resolution).
+    cuit: text("cuit"),
+    // Which source produced `cuit`: the OCR image, the registry read side, or a
+    // manual correction. Null when the row has no CUIT (still flagged).
+    cuitSource: text("cuit_source").$type<CuitSource>(),
+    status: ocrRowStatus("status").notNull().default("PENDING"),
+    // Set when a PENDING row's async OCR fails (status FAILED) — the reason the
+    // extraction crashed, surfaced to the accountant (W7).
+    error: text("error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "ocr_rows_cuit_source_check",
+      sql`${table.cuitSource} IN ('ocr', 'registry', 'manual')`,
+    ),
+  ],
+);
 
 /**
  * The invoice derived from an OCR row (materialized at review time). Receptor

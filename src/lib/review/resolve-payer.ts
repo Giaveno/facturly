@@ -126,10 +126,10 @@ export async function resolvePayerCuit(
     cuit,
   });
 
-  // Record the CUIT on the row and mark it CORRECTED.
+  // Record the CUIT on the row and mark it CORRECTED (source: manual entry).
   await db
     .update(ocrRows)
-    .set({ cuit, status: "CORRECTED" })
+    .set({ cuit, cuitSource: "manual", status: "CORRECTED" })
     .where(eq(ocrRows.id, rowId));
 
   // CORRECTED ⇒ REVIEWED via the existing status machine (no new transition).

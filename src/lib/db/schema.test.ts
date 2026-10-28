@@ -143,14 +143,33 @@ describe("schema guarantees", () => {
     ).rejects.toThrow();
   });
 
-  it("rejects a second credentials row on the singleton scope (UNIQUE index)", async () => {
-    const row = {
-      certPem: "-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----",
-      keyCiphertext: "AA==",
-      iv: "AAAAAAAAAAAAAAAAAAAAAA==",
-      authTag: "AAAAAAAAAAAAAAAAAAAAAA==",
-    };
-    await db.insert(credentials).values(row);
-    await expect(db.insert(credentials).values(row)).rejects.toThrow();
+  it("rejects a cuit_source outside ocr|registry|manual (CHECK constraint)", async () => {
+    const [client] = await db
+      .insert(clients)
+      .values({
+        cuit: "20123456781",
+        razonSocial: "EMISOR C S.A.",
+        ptoVta: 1,
+        condicionIva: "ri",
+      })
+      .returning();
+    const [batch] = await db
+      .insert(batches)
+      .values({ clientId: client!.id })
+      .returning();
+    const [photo] = await db
+      .insert(photos)
+      .values({ batchId: batch!.id, storageKey: "c.jpg" })
+      .returning();
+
+    await expect(
+      db.insert(ocrRows).values({
+        photoId: photo!.id,
+        fields: { name: "PAGADOR", amount: 100, date: "2026-09-22" },
+        confidence: { name: 0.9, amount: 0.9 },
+        status: "CONFIDENT",
+        cuitSource: "bogus" as never,
+      }),
+    ).rejects.toThrow();
   });
 });

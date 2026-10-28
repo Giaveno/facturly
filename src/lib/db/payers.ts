@@ -11,6 +11,7 @@
 
 import { eq, or } from "drizzle-orm";
 import { payers } from "./schema";
+import { isValidCuit } from "@/domain/cuit";
 import type { Db } from "./types";
 
 type PayerRow = typeof payers.$inferSelect;
@@ -111,6 +112,80 @@ function resolveSingleMatch(
     throw new PayerAmbiguityError([...distinctIds]);
   }
   return rows[0];
+}
+
+/** Which registry key identified a payer — strongest first. */
+export type PayerMatchKey = "cbu" | "cvu" | "alias" | "name";
+
+/** The registry's read-side answer: a Mod-11-valid CUIT + the key that matched. */
+export interface ResolvePayerFromRegistryResult {
+  cuit: string;
+  matchedBy: PayerMatchKey;
+}
+
+/**
+ * Determines which key matched a payer, honoring the precedence order. When
+ * several keys match the SAME payer, the strongest key wins; `name` is the
+ * fallback because it is the weakest signal (a shared legal name is common).
+ */
+function matchedByKey(keys: PayerKeys, payer: PayerRow): PayerMatchKey {
+  if (keys.cbu && payer.cbu === keys.cbu) return "cbu";
+  if (keys.cvu && payer.cvu === keys.cvu) return "cvu";
+  if (keys.alias && payer.alias === keys.alias) return "alias";
+  return "name";
+}
+
+/**
+ * READ side of the self-learning registry: resolves a row's CUIT from the
+ * extracted identity keys (CBU → CVU → alias → normalized name, strongest
+ * first). This is the counterpart of `upsertPayer` (the write side) — the
+ * registry must be able to ABSORB a known payer's CUIT during the normal flow,
+ * not only learn it from a manual correction.
+ *
+ * Returns `null` ("unresolved") when the registry cannot decide:
+ *   - no payer matches,
+ *   - the keys resolve to more than one DISTINCT payer (ambiguity — never guess,
+ *     same rule as `upsertPayer`'s `PayerAmbiguityError`),
+ *   - the matched payer has no CUIT yet, or its stored CUIT fails the Mod-11
+ *     check (a corrupt registry value must never propagate).
+ *
+ * The row's CUIT stays absent in every unresolved case, so the row remains
+ * flagged for manual review.
+ */
+export async function resolvePayerCuitFromRegistry(
+  db: Db,
+  input: { name: string; cbu?: string; cvu?: string; alias?: string },
+): Promise<ResolvePayerFromRegistryResult | null> {
+  // Name normalization rejects an empty/only-suffix name — treat that as "no
+  // name key" rather than crashing resolution (CBU/CVU/alias may still decide).
+  let name: string | undefined;
+  try {
+    name = normalizePayerName(input.name);
+  } catch {
+    name = undefined;
+  }
+
+  const keys: PayerKeys = {
+    cbu: input.cbu,
+    cvu: input.cvu,
+    alias: input.alias,
+    name,
+  };
+
+  let payer: PayerRow | undefined;
+  try {
+    payer = resolveSingleMatch(await findExistingPayers(db, keys));
+  } catch (err) {
+    // Ambiguity is "unresolved" for the read side — the row stays flagged, the
+    // accountant resolves it by hand (which re-runs the write-side guard).
+    if (err instanceof PayerAmbiguityError) return null;
+    throw err;
+  }
+
+  if (!payer) return null;
+  if (!payer.cuit || !isValidCuit(payer.cuit)) return null;
+
+  return { cuit: payer.cuit, matchedBy: matchedByKey(keys, payer) };
 }
 
 /** Learns a corrected CUIT onto a matched payer, when present and different. */

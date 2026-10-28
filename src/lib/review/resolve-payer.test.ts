@@ -91,6 +91,7 @@ describe("resolvePayerCuit — unblocks flagged rows", () => {
     const [row] = await db.select().from(ocrRows).where(eq(ocrRows.id, rowId));
     expect(row!.cuit).toBe("30710145764");
     expect(row!.status).toBe("CORRECTED");
+    expect(row!.cuitSource).toBe("manual");
 
     // The registry learned the payer with learnedFrom='manual'.
     const payerRows = await db.select().from(payers);

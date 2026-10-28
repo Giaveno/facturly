@@ -90,6 +90,27 @@ describe("listReviewInvoices — materializes invoices for the review page", () 
     expect(rows[0]!.invoiceStatus).toBe("REVIEWED");
   });
 
+  it("surfaces a registry-resolved CUIT as not-flagged with its source", async () => {
+    const [batch] = await db.insert(batches).values({ clientId }).returning();
+    const [photo] = await db
+      .insert(photos)
+      .values({ batchId: batch!.id, storageKey: "k.jpg" })
+      .returning();
+    await db.insert(ocrRows).values({
+      photoId: photo!.id,
+      fields: { name: "PAGADOR S.A.", amount: 100000, date: "2026-09-22" },
+      confidence: { name: 0.9, amount: 0.9 },
+      cuit: "30710145764",
+      cuitSource: "registry",
+      status: "CONFIDENT",
+    });
+
+    const rows = await listReviewInvoices(db);
+    expect(rows[0]!.cuitSource).toBe("registry");
+    expect(rows[0]!.flagged).toBe(false);
+    expect(rows[0]!.blocked).toBe(false);
+  });
+
   it("re-syncs an existing invoice when the row transitions to CORRECTED", async () => {
     const rowId = await seedRow("BLOCKED", "30710145764");
     await listReviewInvoices(db); // materializes a PENDING invoice

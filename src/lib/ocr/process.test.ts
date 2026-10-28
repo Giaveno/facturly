@@ -140,4 +140,54 @@ describe("async OCR — moves OCR off the request path (PENDING → CONFIDENT/BL
     expect(row!.status).toBe("FAILED");
     expect(row!.error).toContain("crashed");
   });
+
+  it("resolves a known payer's CUIT from the registry when OCR extracts none", async () => {
+    // The registry already knows PAGOS DELTA by CVU (from a past correction).
+    await db.insert(payers).values({
+      name: "PAGOS DELTA",
+      cvu: "0000003100000000000001",
+      cuit: "20123456786",
+      learnedFrom: "manual",
+    });
+
+    const rowId = await seedPendingRow();
+    const result = await processOcrRow(
+      db,
+      new OcrFake(),
+      rowId,
+      readerFor(new Uint8Array([0x42])), // noCuit scenario (CVU + alias, no CUIT)
+    );
+    expect(result.status).toBe("CONFIDENT");
+
+    const [row] = await db.select().from(ocrRows).where(eq(ocrRows.id, rowId));
+    expect(row!.cuit).toBe("20123456786");
+    expect(row!.cuitSource).toBe("registry");
+
+    // An audit entry records the registry resolution with the matched key.
+    const audits = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.rowId, rowId));
+    const entry = audits.find((a) => a.action === "payer.cuit_registry_resolved");
+    expect(entry).toBeDefined();
+    expect(entry!.payload).toEqual({ matchedBy: "cvu" });
+  });
+
+  it("never overrides a valid OCR CUIT with a registry CUIT", async () => {
+    // A payer with the confident receipt's CBU holds a DIFFERENT CUIT — the OCR
+    // extraction must win.
+    await db.insert(payers).values({
+      name: "ACME",
+      cbu: "0110599520000001234567",
+      cuit: "30710145764",
+      learnedFrom: "manual",
+    });
+
+    const rowId = await seedPendingRow();
+    await processOcrRow(db, new OcrFake(), rowId, readerFor(new Uint8Array([0x00])));
+
+    const [row] = await db.select().from(ocrRows).where(eq(ocrRows.id, rowId));
+    expect(row!.cuit).toBe("23000000809"); // the OCR's own CUIT, not the registry's
+    expect(row!.cuitSource).toBe("ocr");
+  });
 });

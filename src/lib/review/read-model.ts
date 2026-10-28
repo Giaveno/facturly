@@ -5,7 +5,7 @@
  */
 
 import { eq } from "drizzle-orm";
-import { batches, clients, ocrRows, photos } from "@/lib/db/schema";
+import { batches, clients, ocrRows, photos, type CuitSource } from "@/lib/db/schema";
 import { isValidCuit } from "@/domain/cuit";
 import { materializeInvoice } from "./workflow";
 import type { OcrFields } from "@/ports/ocr-provider";
@@ -15,6 +15,8 @@ export interface ReviewRow {
   rowId: string;
   status: string;
   cuit: string | null;
+  /** Where `cuit` came from: OCR, the registry read side, or a manual entry. */
+  cuitSource: CuitSource | null;
   fields: OcrFields;
   clientId: string;
   razonSocial: string;
@@ -52,6 +54,7 @@ export async function listReviewRows(db: Db): Promise<ReviewRow[]> {
       rowId: ocrRows.id,
       status: ocrRows.status,
       cuit: ocrRows.cuit,
+      cuitSource: ocrRows.cuitSource,
       fields: ocrRows.fields,
       clientId: batches.clientId,
       razonSocial: clients.razonSocial,

@@ -41,6 +41,7 @@ export default async function ReviewPage() {
                 <td>
                   {r.status}
                   {r.invoiceStatus !== r.status ? ` / ${r.invoiceStatus}` : ""}
+                  {r.cuitSource === "registry" ? " · CUIT from registry" : ""}
                 </td>
                 <td>
                   <ReviewActions

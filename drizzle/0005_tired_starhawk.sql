@@ -1,0 +1,2 @@
+ALTER TABLE "ocr_rows" ADD COLUMN "cuit_source" text;--> statement-breakpoint
+ALTER TABLE "ocr_rows" ADD CONSTRAINT "ocr_rows_cuit_source_check" CHECK ("ocr_rows"."cuit_source" IN ('ocr', 'registry', 'manual'));

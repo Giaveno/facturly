@@ -11,7 +11,8 @@
 import { eq } from "drizzle-orm";
 import { ocrRows, photos } from "@/lib/db/schema";
 import { classifyOcrRowStatus } from "@/lib/pipeline/ingest";
-import { isValidCuit } from "@/domain/cuit";
+import { resolveRowCuit } from "./resolve-cuit";
+import { writeAudit } from "@/lib/audit/audit";
 import type { OcrProvider } from "@/ports/ocr-provider";
 import type { Db } from "@/lib/db/types";
 
@@ -44,7 +45,18 @@ export async function processOcrRow(
     const image = await getImage(photo.storageKey);
     const result = await ocr.extract(image);
     const status = classifyOcrRowStatus(result.confidence);
-    const cuit = result.cuit && isValidCuit(result.cuit) ? result.cuit : null;
+
+    // A valid OCR CUIT wins; otherwise try the registry READ side so a known
+    // payer arrives already carrying its CUIT (no manual re-entry per invoice).
+    const { cuit, cuitSource, matchedBy } = await resolveRowCuit(db, result);
+    if (matchedBy) {
+      await writeAudit(db, {
+        actor: "system",
+        action: "payer.cuit_registry_resolved",
+        rowId,
+        payload: { matchedBy },
+      });
+    }
 
     await db
       .update(ocrRows)
@@ -52,6 +64,7 @@ export async function processOcrRow(
         fields: result.fields,
         confidence: result.confidence,
         cuit,
+        cuitSource,
         status,
         error: null,
       })

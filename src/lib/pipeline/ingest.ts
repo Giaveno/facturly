@@ -8,7 +8,8 @@
  */
 
 import { batches, ocrRows, photos } from "@/lib/db/schema";
-import { isValidCuit } from "@/domain/cuit";
+import { resolveRowCuit } from "@/lib/ocr/resolve-cuit";
+import { writeAudit } from "@/lib/audit/audit";
 import {
   OCR_CONFIDENCE_THRESHOLD,
   type OcrProvider,
@@ -78,9 +79,10 @@ export async function processUpload(
 
       const result = await ocr.extract(image);
       const status = classifyOcrRowStatus(result.confidence);
-      // Store the CUIT only when checksum-valid; otherwise it stays null and is
-      // resolved later against the payer registry.
-      const cuit = result.cuit && isValidCuit(result.cuit) ? result.cuit : null;
+
+      // A valid OCR CUIT wins; otherwise resolve from the registry READ side so
+      // a known payer arrives already carrying its CUIT (never a manual re-entry).
+      const { cuit, cuitSource, matchedBy } = await resolveRowCuit(tx, result);
 
       const [row] = await tx
         .insert(ocrRows)
@@ -89,10 +91,20 @@ export async function processUpload(
           fields: result.fields,
           confidence: result.confidence,
           cuit,
+          cuitSource,
           status,
         })
         .returning();
       if (!row) throw new Error("processUpload: failed to create ocr_row");
+
+      if (matchedBy) {
+        await writeAudit(tx, {
+          actor: "system",
+          action: "payer.cuit_registry_resolved",
+          rowId: row.id,
+          payload: { matchedBy },
+        });
+      }
 
       rows.push({ id: row.id, status: row.status, cuit: row.cuit });
     }
