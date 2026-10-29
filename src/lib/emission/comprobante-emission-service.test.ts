@@ -3,10 +3,12 @@ import { eq } from "drizzle-orm";
 import { ArcaBusinessError } from "@/adapters/arca/errors";
 import { ArcaGatewayFake } from "@/adapters/arca/arca-gateway.fake";
 import type { ArcaGateway } from "@/ports/arca-gateway";
+import type { Db } from "@/lib/db/types";
 import { createTestDb } from "@/test-support/test-db";
 import { clients, comprobantes, emissionSeriesClaims } from "@/lib/db/schema";
 import {
   emitComprobante,
+  recoverSeriesClaim,
   EMISSION_UNCERTAIN_REASON,
   IDEMPOTENCY_CONFLICT_REASON,
   RECONCILIATION_NOT_FOUND_REASON,
@@ -32,6 +34,17 @@ describe("comprobante emission service", () => {
     expect(uncertainGraceMs("homologacion", {})).toBe(75_000);
     expect(uncertainGraceMs("production", {})).toBe(600_000);
     expect(uncertainGraceMs("homologacion", { ARCA_UNCERTAIN_GRACE_MS: "1234" })).toBe(1234);
+  });
+
+  it("rejects a recovery key that does not match its series input before database access", async () => {
+    const forbiddenDb = new Proxy({} as Db, { get() { throw new Error("database access"); } });
+    await expect(recoverSeriesClaim({ db: forbiddenDb, gateway: {} as ArcaGateway }, {
+      key: seriesKey("homologacion", "20123456786", 1, 11),
+      environment: "homologacion",
+      emisorCuit: "20123456786",
+      ptoVta: 1,
+      cbteTipo: 1,
+    })).rejects.toThrow("no coincide");
   });
 
   it("does not clear a newer uncertain claim generation during reconciliation", async () => {

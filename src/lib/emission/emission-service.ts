@@ -217,6 +217,20 @@ function makeAllocator(deps: EmissionDeps): NumberAllocator {
   );
 }
 
+function isIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value;
+}
+
+/** A consultation may only complete a pinned reservation with an exact number and valid CAE. */
+function isValidPinnedResult(request: FECAEReq, result: IssueInvoiceResult | null): result is IssueInvoiceResult {
+  return !!result &&
+    result.cbteNro === request.cbteNro &&
+    /^\d{14}$/.test(result.cae) &&
+    isIsoDate(result.caeFchVto);
+}
+
 /** A durable claim covers allocation, reservation, dispatch and persistence. */
 export async function emitInvoice(deps: EmissionDeps, allocator: NumberAllocator, invoiceId: string): Promise<EmissionResult> {
   if (!deps.emissionsEnabled) throw new EmissionError("Emissions are disabled; refusing to reserve a number");
@@ -408,7 +422,7 @@ async function emitWithSeriesClaim(
     if (wasReserved) {
       if (!gateway.consultInvoice) throw new EmissionError("Reservation requires read-only consultation; reissue prohibited");
       const existing = await gateway.consultInvoice(request);
-      if (!existing) throw new EmissionError("Reserved outcome unresolved; no automatic reissue");
+      if (!isValidPinnedResult(request, existing)) throw new EmissionError("Reserved outcome unresolved; no automatic reissue");
       result = existing;
     } else {
       if(!dispatchGuard)throw new EmissionError("Dispatch claim is required");
@@ -423,7 +437,7 @@ async function emitWithSeriesClaim(
       if (latest >= request.cbteNro) {
         if (!gateway.consultInvoice) throw new ArcaTransientError("Pinned reservation requires read-only consultation", { stage: "issuance" });
         const observed = await gateway.consultInvoice(request);
-        if (!observed) throw new ArcaTransientError("Pinned reservation remains unresolved", { stage: "issuance" });
+        if (!isValidPinnedResult(request, observed)) throw new ArcaTransientError("Pinned reservation remains unresolved", { stage: "issuance" });
         result = observed;
       } else {
         result = await gateway.issueInvoice(request, dispatchGuard);

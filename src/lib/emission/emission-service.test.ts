@@ -393,6 +393,25 @@ describe("emission service — idempotency reservation + status machine", () => 
     expect(counting.issueCalls).toEqual([1, 2]);
   });
 
+  it("does not persist EMITTED when ARCA advances but consultation is mis-keyed", async () => {
+    await seedDelegation(true);
+    const { invoiceId } = await seedApprovedInvoice();
+    const base = new ArcaGatewayFake(undefined, () => FIXED_DATE);
+    let latestCalls = 0;
+    let issueCalls = 0;
+    const gateway: ArcaGateway = {
+      getIvaCondition: base.getIvaCondition.bind(base),
+      ultimoAutorizado: async () => latestCalls++ === 0 ? 0 : 1,
+      consultInvoice: async (request) => ({ cbteNro: request.cbteNro + 1, cae: "70000000000001", caeFchVto: "2026-10-02" }),
+      issueInvoice: async () => { issueCalls += 1; throw new Error("must not dispatch"); },
+    };
+    const [result] = await emitBatch(deps(gateway), [invoiceId]);
+    expect(result).toMatchObject({ outcome: "failed_transient" });
+    expect(issueCalls).toBe(0);
+    expect((await db.select().from(invoices).where(eq(invoices.id, invoiceId)))[0]!.status).toBe("EMIT_ERROR");
+    expect((await db.select().from(issuedInvoices).where(eq(issuedInvoices.invoiceId, invoiceId)))[0]).toMatchObject({ cbteNro: 1, cae: null });
+  });
+
   it("lost-response recovery consults the SAME cbteNro without another issue", async () => {
     await seedDelegation(true);
     const { invoiceId } = await seedApprovedInvoice();

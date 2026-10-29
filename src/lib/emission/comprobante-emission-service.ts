@@ -190,6 +190,8 @@ export interface SeriesRecoveryInput {
  * generation. This function never calls FECAESolicitar.
  */
 export async function recoverSeriesClaim(deps: ComprobanteEmissionDeps, input: SeriesRecoveryInput): Promise<void> {
+  const expectedKey = seriesKey(input.environment, input.emisorCuit, input.ptoVta, input.cbteTipo);
+  if (input.key !== expectedKey) throw new ComprobanteEmissionError("La clave de recuperación no coincide con la serie solicitada.");
   const observed = await claimFor(deps.db, input.key);
   if (!observed) return;
   const nowMs = (deps.now ?? (() => new Date()))().getTime();
