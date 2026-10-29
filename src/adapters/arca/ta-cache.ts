@@ -22,8 +22,10 @@
  *     valid TA is returned and the cache-write failure is logged.
  */
 
+import { createHash } from "node:crypto";
+import { safeQueryDiagnostic } from "./query-diagnostics";
 import type { WsaaTa } from "./wsaa";
-import { noopLogger, noopMetrics, type ArcaLogger, type ArcaMetrics } from "./logger";
+import { createConsoleLogger, noopMetrics, type ArcaLogger, type ArcaMetrics } from "./logger";
 
 /** A cached TA entry (epoch-millisecond timestamps). */
 export interface TaCacheEntry {
@@ -121,7 +123,7 @@ export class TaCache {
     this.policy = { ...DEFAULT_TA_POLICY, ...options.policy };
     this.clock = options.clock ?? (() => new Date());
     this.scope = options.scope ?? "";
-    this.logger = options.logger ?? noopLogger;
+    this.logger = options.logger ?? createConsoleLogger();
     this.metrics = options.metrics ?? noopMetrics;
   }
 
@@ -135,6 +137,7 @@ export class TaCache {
     const key = this.keyFor(service);
     const nowMs = this.clock().getTime();
     const entry = await this.store.get(key);
+    this.logger.info("ta_cache_lookup", { service, cache_key_hash: createHash("sha256").update(key).digest("hex").slice(0, 12), cache: entry ? "hit" : "miss" });
 
     if (entry && !shouldRenew(nowMs, entry, this.policy)) {
       return this.toTa(entry);
@@ -177,9 +180,10 @@ export class TaCache {
       // A genuine loginCms failure: fall back to a still-valid cached TA (this
       // is the WSAA-cooldown path), otherwise rethrow.
       this.metrics.increment("wsaa_failure");
+      const diagnostic = safeQueryDiagnostic(err && typeof err === "object" && "diagnostic" in err ? err.diagnostic : undefined);
       this.logger.warn("wsaa_login_failed", {
-        service,
-        message: err instanceof Error ? err.message : String(err),
+        service, cache_key_hash: createHash("sha256").update(key).digest("hex").slice(0, 12), cache: entry ? "hit" : "miss",
+        faultcode: diagnostic?.faultcode, faultstring: diagnostic?.faultstring,
       });
       if (entry && nowMs < entry.expiresAt) {
         this.metrics.increment("wsaa_cooldown");
@@ -198,11 +202,10 @@ export class TaCache {
     };
     try {
       await this.store.put(key, entryToStore);
-    } catch (putErr) {
+    } catch {
       this.metrics.increment("ta_cache_write_failed");
-      this.logger.warn("ta_cache_write_failed", {
-        service,
-        message: putErr instanceof Error ? putErr.message : String(putErr),
+      this.logger.error("ta_cache_write_failed", {
+        service, cache_key_hash: createHash("sha256").update(key).digest("hex").slice(0, 12), reason: "store-put-failed",
       });
     }
     this.metrics.increment("ta_renewed");

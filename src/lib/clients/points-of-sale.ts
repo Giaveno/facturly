@@ -1,3 +1,5 @@
+import { redactSoap } from "@/adapters/arca/soap-diagnostics";
+import type { ArcaLogger } from "@/adapters/arca/logger";
 import { HOMOLOGACION_CALL_MS, HOMOLOGACION_QUERY_MS } from "@/adapters/arca/timeouts";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -38,6 +40,7 @@ interface Options {
   env: Record<string, string | undefined>;
   fetchFn?: typeof fetch;
   attempts?: Map<string, Attempt>;
+  logger?: ArcaLogger;
 }
 const MAX_BYTES = 1_048_576;
 const COOLDOWN_MS = 15_000;
@@ -83,7 +86,7 @@ async function readBounded(response: Response, signal: AbortSignal, stage: Query
   } finally { signal.removeEventListener("abort", cancel); cancel(); }
 }
 
-function soapFault(xml: string, stage: QueryStage, httpStatus: number): ArcaQueryError | undefined {
+function soapFault(xml: string, stage: QueryStage, httpStatus: number, secrets: readonly string[] = []): ArcaQueryError | undefined {
   if (/<!DOCTYPE|<!ENTITY/i.test(xml) || XMLValidator.validate(xml) !== true) return;
   try {
     const parsed = new XMLParser({ removeNSPrefix: true, ignoreAttributes: true, parseTagValue: false }).parse(xml);
@@ -91,12 +94,16 @@ function soapFault(xml: string, stage: QueryStage, httpStatus: number): ArcaQuer
     if (!body || typeof body !== "object" || !("Fault" in body)) return;
     const code = body.Fault?.faultcode;
     const providerCodes = typeof code === "string" && /^\d{1,9}$/.test(code) ? [Number(code)] : undefined;
-    return new ArcaQueryError(stage, "soap-fault", { httpStatus, providerCodes });
+    const safe = stage === "wsaa" ? new XMLParser({ removeNSPrefix: true, parseTagValue: false }).parse(redactSoap(xml, secrets))?.Envelope?.Body?.Fault : undefined;
+    return new ArcaQueryError(stage, "soap-fault", { httpStatus, providerCodes,
+      ...(typeof safe?.faultcode === "string" ? { faultcode: safe.faultcode } : {}),
+      ...(typeof safe?.faultstring === "string" ? { faultstring: safe.faultstring } : {}),
+    });
   } catch { return; }
 }
 
 /** Fiscal read only; only the existing durable WSAA TA cache may be written. */
-export function createPointsOfSaleChecker({ repository, getClient, store, env, fetchFn = fetch, attempts = new Map() }: Options) {
+export function createPointsOfSaleChecker({ repository, getClient, store, env, fetchFn = fetch, attempts = new Map(), logger }: Options) {
   return async (clientId: string, fingerprint: string): Promise<PointsOfSaleReport> => {
     if (env.ARCA_ENV !== "homologacion") throw new PointsOfSaleError("environment");
     let stage: QueryStage | undefined;
@@ -139,7 +146,7 @@ export function createPointsOfSaleChecker({ repository, getClient, store, env, f
                 response = await fetchFn(url, { method: "POST", body, headers, redirect: "error", cache: "no-store", signal: callSignal });
                 if (!response.ok && !response.body) throw new ArcaQueryError(callStage, "http", { httpStatus: response.status });
                 const text = await readBounded(response, callSignal, callStage);
-                const fault = soapFault(text, callStage, response.status);
+                const fault = soapFault(text, callStage, response.status, [stored.certPem, keyPem]);
                 if (fault) throw fault;
                 if (!response.ok) {
                   if (callStage === "wsfe") {
@@ -160,7 +167,7 @@ export function createPointsOfSaleChecker({ repository, getClient, store, env, f
           } };
           currentAttempt.promise = (async () => {
             try {
-              const cache = createCredentialTaCache({ url: WSAA_HOMOLOGACION_URL, credentials: { certPem: stored.certPem, keyPem }, store, transport });
+              const cache = createCredentialTaCache({ url: WSAA_HOMOLOGACION_URL, credentials: { certPem: stored.certPem, keyPem }, store, transport, logger });
               stage = "wsaa";
               let ticket;
               try { ticket = await cache.get(ARCA_SERVICE_WSFE); }
@@ -173,7 +180,9 @@ export function createPointsOfSaleChecker({ repository, getClient, store, env, f
               currentAttempt.validUntil = Math.min(currentAttempt.validUntil, expiresAt);
               if (!ticket.token.trim() || !ticket.sign.trim() || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new ArcaQueryError("wsaa", "malformed-response");
               stage = "wsfe";
-              const points = await new WsfeClient({ url: WSFE_HOMOLOGACION_URL, transport }).getPointsOfSale({ token: ticket.token, sign: ticket.sign, cuit: client.cuit });
+              const wsfe = new WsfeClient({ url: WSFE_HOMOLOGACION_URL, transport });
+              // Preserve the existing ticket and diagnostic evidence; no auth retry or eviction.
+              const points = await wsfe.getPointsOfSale({ token: ticket.token, sign: ticket.sign, cuit: client.cuit });
               signal.throwIfAborted();
               if (Date.now() >= currentAttempt.validUntil) throw new PointsOfSaleError("upstream");
               const configured = points.find(point => point.number === client.ptoVta);

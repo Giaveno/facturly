@@ -17,7 +17,7 @@
  *   - Success is gated on `resultado === "A"` (a `Resultado=R` carrying a CAE is
  *     rejected, not accepted).
  *
- * Read-only queries may refresh authentication once. Issuance never retries.
+ * Queries and issuance never evict authentication tickets or retry automatically.
  */
 
 import { createHash } from "node:crypto";
@@ -40,7 +40,7 @@ import {
   classifyArcaErrorCode,
   DUPLICATE_ERROR_CODES,
 } from "./errors";
-import { noopLogger, noopMetrics, type ArcaLogger, type ArcaMetrics } from "./logger";
+import { createConsoleLogger, noopLogger, noopMetrics, type ArcaLogger, type ArcaMetrics } from "./logger";
 import { readEmissionsEnabled } from "./emissions";
 import { ArcaQueryError } from "./query-diagnostics";
 
@@ -75,7 +75,7 @@ export class ArcaGatewayProd implements ArcaGateway {
     clientCuit: string,
     payerCuit: string,
   ): Promise<CondicionIVA | "unresolved"> {
-    return this.withFreshTaOnAuth(ARCA_SERVICE_PADRON, async (ta) => {
+    return this.withTa(ARCA_SERVICE_PADRON, async (ta) => {
       // cuitRepresentada = clientCuit (per call — no shared-instance downgrade),
       // idPersona = payerCuit.
       return this.padron.getPersona(ta.token, ta.sign, clientCuit, payerCuit);
@@ -87,7 +87,7 @@ export class ArcaGatewayProd implements ArcaGateway {
     ptoVta: number,
     cbteTipo: number,
   ): Promise<number> {
-    return this.withFreshTaOnAuth(ARCA_SERVICE_WSFE, async (ta) => {
+    return this.withTa(ARCA_SERVICE_WSFE, async (ta) => {
       return this.wsfe.ultimoAutorizado(
         { token: ta.token, sign: ta.sign, cuit },
         { ptoVta, cbteTipo },
@@ -211,29 +211,11 @@ export class ArcaGatewayProd implements ArcaGateway {
     };
   }
 
-  /** Evicts the TA and retries ONCE when ARCA rejects the token/delegation. */
-  private async withFreshTaOnAuth<T>(
-    service: string,
-    fn: (ta: WsaaTa) => Promise<T>,
-  ): Promise<T> {
-    let ta = await this.taCache.get(service);
-    try {
-      return await fn(ta);
-    } catch (err) {
-      if (err instanceof ArcaAuthError) {
-        this.metrics.increment("ta_evicted_auth");
-        this.logger.warn("ta_auth_rejected_retry", {
-          service,
-          code: err.code,
-          message: err.message,
-        });
-        await this.taCache.evict(service);
-        ta = await this.taCache.get(service);
-        return await fn(ta);
-      }
-      throw err;
-    }
+  /** Authentication failures preserve the durable ticket; never evict and retry. */
+  private async withTa<T>(service: string, fn: (ta: WsaaTa) => Promise<T>): Promise<T> {
+    return fn(await this.taCache.get(service));
   }
+
 }
 
 export interface ArcaGatewayProdConfig {
@@ -269,7 +251,7 @@ export function createArcaGatewayProd(
   config: ArcaGatewayProdConfig,
 ): ArcaGateway {
   const clock = config.clock ?? (() => new Date());
-  const logger = config.logger ?? noopLogger;
+  const logger = config.logger ?? createConsoleLogger();
   const metrics = config.metrics ?? noopMetrics;
 
   // Resolve dynamic providers before selecting a certificate + endpoint cache.

@@ -23,6 +23,8 @@ function failureMessage(value: unknown, status: number): string {
   let message = typeof body.code === "string" && Object.hasOwn(local, body.code) ? local[body.code]! : genericFailure;
   if (diagnostic) {
     message += ` Etapa: ${diagnostic.stage === "wsaa" ? "WSAA (autenticación)" : "WSFE (consulta de puntos de venta)"}. Categoría: ${categories[diagnostic.category]}.`;
+    if (diagnostic.faultcode) message += ` WSAA faultcode: ${diagnostic.faultcode}.`;
+    if (diagnostic.faultstring) message += ` WSAA: ${diagnostic.faultstring}.`;
     if (diagnostic.httpStatus !== undefined) message += ` HTTP ${diagnostic.httpStatus}.`;
     if (diagnostic.providerCodes?.length) message += ` Códigos ARCA: ${diagnostic.providerCodes.join(", ")}.`;
   }

@@ -82,7 +82,8 @@ describe("persisted credential homologation authentication check", () => {
       const [a, b] = await Promise.all([s.check(s.fingerprint()), s.check(s.fingerprint())]);
       expect(a).toEqual(b); expect(a.services.map(r => r.status)).toEqual(["failure", "ok"]);
       await s.check(s.fingerprint()); expect(s.fetchFn).toHaveBeenCalledTimes(2);
-      expect(JSON.stringify(a)).not.toMatch(/SECRET|PRIVATE|stack/); expect(log).not.toHaveBeenCalled();
+      expect(JSON.stringify(a)).not.toMatch(/SECRET|PRIVATE|stack/); expect(JSON.stringify(log.mock.calls)).not.toMatch(/SECRET_TOKEN|SECRET_SIGN|PRIVATE KEY/);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("wsaa_login_failed"));
     } finally { log.mockRestore(); }
   });
   it("rejects results if the stored certificate changes while the check runs", async () => {

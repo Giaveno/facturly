@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   DEFAULT_TA_POLICY,
   parseWsaaExpiration,
@@ -367,6 +367,25 @@ describe("ta-cache — TaCache", () => {
     expect(calls).toBe(1);
   });
 
+  it("persistent read: sequential requests reuse the stored TA", async () => {
+    const { provider, calls } = fakeWsaa({
+      token: "cached",
+      sign: "cached-sign",
+      expirationTime: EXPIRATION,
+    });
+    const { store } = inMemoryStore();
+    const cache = new TaCache({
+      wsaa: provider,
+      store,
+      clock: () => new Date(EXPIRY_MS - 3600 * 1000),
+    });
+
+    await cache.get("wsfe");
+    await cache.get("wsfe");
+
+    expect(calls).toEqual(["wsfe"]);
+  });
+
   it("returns a valid TA even when store.put fails (cache-write failure is not fatal)", async () => {
     const { provider, calls } = fakeWsaa({
       token: "new-token",
@@ -390,6 +409,36 @@ describe("ta-cache — TaCache", () => {
     const ta = await cache.get("wsfe");
     expect(ta.token).toBe("new-token"); // the valid TA is NOT discarded
     expect(calls).toEqual(["wsfe"]);
+  });
+
+  it("keeps the old valid row intact when login fails", async () => {
+    const old = {token:"old",sign:"old-sign",expiresAt:EXPIRY_MS,issuedAt:EXPIRY_MS-3600000};
+    const {store,map}=inMemoryStore(new Map([["wsfe",old]]));
+    const put=vi.spyOn(store,"put"), remove=vi.spyOn(store,"delete");
+    const cache=new TaCache({store,clock:()=>new Date(EXPIRY_MS-60000),wsaa:{loginCms:async()=>{throw Error("failure");}}});
+    await cache.get("wsfe");
+    expect(map.get("wsfe")).toBe(old);
+    expect(put).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("replaces a ticket only via put, never deleting before renewal", async () => {
+    const old={token:"old",sign:"old-sign",expiresAt:EXPIRY_MS,issuedAt:EXPIRY_MS-3600000};
+    const {store,map}=inMemoryStore(new Map([["wsfe",old]]));
+    const remove=vi.spyOn(store,"delete");
+    const originalPut=store.put;
+    vi.spyOn(store,"put").mockImplementation(async(key,value)=>{expect(map.get(key)).toBe(old); await originalPut(key,value);});
+    const cache=new TaCache({store,clock:()=>new Date(EXPIRY_MS-60000),wsaa:{loginCms:async()=>{expect(map.get("wsfe")).toBe(old);return {token:"new",sign:"new-sign",expirationTime:EXPIRATION};}}});
+    await cache.get("wsfe"); expect(map.get("wsfe")?.token).toBe("new"); expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("always reports a failed put without exposing driver errors or credentials", async () => {
+    const log=vi.spyOn(console,"error").mockImplementation(()=>{});
+    const cache=new TaCache({store:{get:async()=>null,put:async()=>{throw Error("SECRET_TOKEN reflected driver value");}},wsaa:{loginCms:async()=>({token:"new",sign:"new-sign",expirationTime:EXPIRATION})},clock:()=>new Date(EXPIRY_MS-3600000)});
+    try {
+      expect((await cache.get("wsfe")).token).toBe("new");
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('"event":"ta_cache_write_failed"'));
+      expect(JSON.stringify(log.mock.calls)).not.toContain("SECRET_TOKEN");
+    } finally { log.mockRestore(); }
   });
 
   it("evicts a cached TA (used on auth rejection before a fresh retry)", async () => {

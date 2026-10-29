@@ -1,3 +1,12 @@
+/** Bound and redact untrusted fault fields; never accept credential-like blobs. */
+export function sanitizeFaultText(value: string): string {
+  // Omit the entire field: line-wise redaction could expose a short wrapped tail.
+  if (/[A-Za-z0-9+/_=-]{64,}/.test(value)) return "[REDACTED: credential-like fault text]";
+  return value.replace(/-----BEGIN [^-]+-----[\s\S]*?(?:-----END [^-]+-----|$)/gi, "[REDACTED]")
+    .replace(/\b(token|sign|password|secret|signature|cms|privatekey|cert(?:ificate)?)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[REDACTED]")
+    .replace(/[A-Za-z0-9+/_=-]{64,}/g, "[REDACTED]")
+    .replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 300);
+}
 /** Public diagnostics contain only protocol stages, fixed categories and bounded numbers. */
 export type QueryStage = "wsaa" | "wsfe" | "padron";
 const categories = ["http", "network", "timeout", "soap-fault", "provider-errors", "malformed-response", "response-too-large", "cooldown", "internal"] as const;
@@ -9,6 +18,9 @@ export interface QueryDiagnostic {
   httpStatus?: number;
   providerCodes?: number[];
   faultReason?: PadronFaultReason;
+  /** Redacted fault fields, populated only by homologation diagnostics. */
+  faultcode?: string;
+  faultstring?: string;
 }
 export function safeQueryDiagnostic(value: unknown): QueryDiagnostic | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
@@ -21,11 +33,15 @@ export function safeQueryDiagnostic(value: unknown): QueryDiagnostic | undefined
     const codes = d.providerCodes.slice(0, 100).filter((code): code is number => typeof code === "number" && Number.isInteger(code) && code >= 0 && code <= 999_999_999).slice(0, 10);
     if (codes.length) safe.providerCodes = codes;
   }
+  if (d.stage === "wsaa" && d.category === "soap-fault") {
+    if (typeof d.faultcode === "string") safe.faultcode = sanitizeFaultText(d.faultcode);
+    if (typeof d.faultstring === "string") safe.faultstring = sanitizeFaultText(d.faultstring);
+  }
   return safe;
 }
 export class ArcaQueryError extends Error {
   readonly diagnostic: QueryDiagnostic;
-  constructor(stage: QueryStage, category: QueryCategory, details: Pick<QueryDiagnostic, "httpStatus" | "providerCodes" | "faultReason"> = {}) {
+  constructor(stage: QueryStage, category: QueryCategory, details: Pick<QueryDiagnostic, "httpStatus" | "providerCodes" | "faultReason" | "faultcode" | "faultstring"> = {}) {
     super(category === "timeout" ? "ARCA query timed out" : "ARCA query failed");
     this.diagnostic = safeQueryDiagnostic({ stage, category, ...details })!;
   }

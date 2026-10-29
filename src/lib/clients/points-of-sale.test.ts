@@ -20,7 +20,7 @@ function setup(env: Record<string, string | undefined> = { ARCA_ENV: "homologaci
   const repository = { get: vi.fn(async () => stored) };
   const getClient = vi.fn(async (id: string) => client ? { ...client, id } : null);
   const entries = new Map<string, TaCacheEntry>([[`${WSAA_HOMOLOGACION_URL}:${fingerprint}:wsfe`, { token: "SECRET_TOKEN", sign: "SECRET_SIGN", expiresAt: Date.now() + 3600000, issuedAt: Date.now() }]]);
-  const store = { get: vi.fn(async (key: string) => entries.get(key) ?? null), put: vi.fn(async (key: string, entry: TaCacheEntry) => { entries.set(key, entry); }) };
+  const store = { get: vi.fn(async (key: string) => entries.get(key) ?? null), put: vi.fn(async (key: string, entry: TaCacheEntry) => { entries.set(key, entry); }), delete: vi.fn(async (key: string) => { entries.delete(key); }) };
   const fetchFn = vi.fn<typeof fetch>(async () => new Response(xml));
   const check = createPointsOfSaleChecker({ repository, getClient, store, env, fetchFn });
   return { check, repository, getClient, fetchFn, store, entries, fingerprint, env, setClient: (next: typeof client) => { client = next; }, edit: (patch: Partial<NonNullable<typeof client>>) => { client = { ...client!, ...patch }; }, replace: (next: typeof stored) => { stored = next; } };
@@ -37,6 +37,15 @@ describe("stored client homologation point-of-sale query", () => {
     const [url, init] = s.fetchFn.mock.calls[0]!; expect(url).toBe(WSFE_HOMOLOGACION_URL); expect(init).toMatchObject({ redirect: "error", cache: "no-store", method: "POST" });
     expect(init?.body).toContain("<ar:Cuit>30710145764</ar:Cuit>"); expect(init?.body).not.toMatch(/FECAESolicitar|FECAEARegInformativo/);
     expect(JSON.stringify(result)).not.toMatch(/SECRET|PRIVATE|BEGIN|encryptedKey|certPem/); expect(s.store.put).not.toHaveBeenCalled();
+  });
+  it("preserves the WSFE ticket after 600 and never retries", async () => {
+    const s = setup();
+    const before = [...s.entries.entries()];
+    s.fetchFn.mockResolvedValue(new Response(xml.replace("<ResultGet>", "<Errors><Err><Code>600</Code><Msg>stale</Msg></Err></Errors><ResultGet>")));
+    await expect(s.check("client", s.fingerprint)).rejects.toMatchObject({diagnostic:{providerCodes:[600]}});
+    expect(s.fetchFn).toHaveBeenCalledTimes(1);
+    expect(s.store.delete).not.toHaveBeenCalled();
+    expect([...s.entries.entries()]).toEqual(before);
   });
   it("shares in-flight queries and briefly reuses same identity only", async () => {
     const s = setup(); const [a, b] = await Promise.all([s.check("client", s.fingerprint), s.check("client", s.fingerprint)]);
@@ -100,6 +109,27 @@ describe("stored client homologation point-of-sale query", () => {
     const s = setup(); if (stage === "wsaa") s.entries.clear();
     s.fetchFn.mockResolvedValue(new Response("<Envelope><Body><Fault><faultcode>SECRET</faultcode><faultstring>PRIVATE KEY</faultstring></Fault></Body></Envelope>", { status: 500 }));
     await expect(s.check("client", s.fingerprint)).rejects.toMatchObject({ diagnostic: { stage, category: "soap-fault", httpStatus: 500 } });
+  });
+  it("retains redacted WSAA fault fields with cache identity logging", async () => {
+    const s=setup();s.entries.clear();
+    const log=vi.spyOn(console,"error").mockImplementation(()=>{});
+    s.fetchFn.mockResolvedValue(new Response(`<Envelope><Body><Fault><faultcode>ns1:coe.alreadyAuthenticated</faultcode><faultstring>El CEE ya posee un TA valido token=SECRET_TOKEN</faultstring></Fault></Body></Envelope>`,{status:500}));
+    try {
+      await expect(s.check("client",s.fingerprint)).rejects.toMatchObject({diagnostic:{faultcode:"ns1:coe.alreadyAuthenticated",faultstring:"El CEE ya posee un TA valido token=[REDACTED]"}});
+      const lines=JSON.stringify(log.mock.calls);
+      expect(lines).toContain("cache_key_hash");expect(lines).toContain("miss");expect(lines).not.toContain("SECRET_TOKEN");
+    } finally {log.mockRestore();}
+  });
+  it("omits a reflected wrapped CMS including its short secret tail from logs and diagnostics", async () => {
+    const s=setup();s.entries.clear();
+    const log=vi.spyOn(console,"error").mockImplementation(()=>{});
+    const wrapped="A".repeat(76)+"\nSHORT_SECRET_TAIL";
+    s.fetchFn.mockResolvedValue(new Response(`<Envelope><Body><Fault><faultcode>server</faultcode><faultstring>${wrapped}</faultstring></Fault></Body></Envelope>`,{status:500}));
+    try {
+      const result=await s.check("client",s.fingerprint).catch(error=>error);
+      expect(result.diagnostic.faultstring).toBe("[REDACTED: credential-like fault text]");
+      expect(JSON.stringify([result,log.mock.calls])).not.toContain("SHORT_SECRET_TAIL");
+    } finally {log.mockRestore();}
   });
   it("preserves numeric provider errors and treats an empty result as a successful read only", async () => {
     const s = setup();

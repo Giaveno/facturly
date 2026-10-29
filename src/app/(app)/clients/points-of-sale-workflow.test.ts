@@ -45,3 +45,13 @@ it("rejects arbitrary diagnostic strings and explains local stale credentials sa
   const flow = createPointsOfSaleWorkflow(client, fingerprint, vi.fn(), request); await flow.check();
   expect(flow.state().error).toMatch(/cambiaron/); expect(flow.state().error).not.toMatch(/SECRET|PRIVATE/);
 });
+
+it("shows only bounded WSAA fault diagnostics in the homologation workflow",async()=>{
+  const flow=createPointsOfSaleWorkflow(client,fingerprint,vi.fn(),vi.fn(async()=>Response.json({code:"upstream",diagnostic:{stage:"wsaa",category:"soap-fault",faultcode:"ns1:coe.alreadyAuthenticated",faultstring:"El CEE ya posee un TA valido token=SECRET_TOKEN"}},{status:502})));
+  await flow.check();expect(flow.state().error).toContain("alreadyAuthenticated");expect(flow.state().error).toContain("El CEE ya posee");expect(flow.state().error).not.toContain("SECRET_TOKEN");
+});
+
+it("never exposes the short tail of reflected wrapped CMS in the screen",async()=>{
+  const flow=createPointsOfSaleWorkflow(client,fingerprint,vi.fn(),vi.fn(async()=>Response.json({code:"upstream",diagnostic:{stage:"wsaa",category:"soap-fault",faultstring:"A".repeat(76)+"\nSHORT_SECRET_TAIL"}},{status:502})));
+  await flow.check();expect(flow.state().error).not.toContain("SHORT_SECRET_TAIL");
+});
