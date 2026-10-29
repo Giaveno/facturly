@@ -87,6 +87,19 @@ export interface PdfContentModel {
   totals?: Array<{ label: string; value: string }>;
 }
 
+export const PDF_PAGE_SIZE = [595, 842] as const;
+export const PDF_QR_BOUNDS = { x: 420, y: 50, width: 120, height: 120 } as const;
+
+function printableDate(date: string): string {
+  const compact = date.replaceAll("-", "");
+  return /^\d{8}$/.test(compact) ? `${compact.slice(6, 8)}/${compact.slice(4, 6)}/${compact.slice(0, 4)}` : date;
+}
+
+function comprobanteTitle(type: number): string {
+  const titles: Record<number, string> = { 1: "FACTURA A", 6: "FACTURA B", 11: "FACTURA C", 3: "NOTA DE CREDITO A", 8: "NOTA DE CREDITO B", 13: "NOTA DE CREDITO C" };
+  return `${titles[type] ?? "COMPROBANTE"} (${String(type).padStart(3, "0")})`;
+}
+
 /** Builds the pure content model for an issued invoice. */
 export function buildInvoicePdfModel(input: InvoicePdfInput): PdfContentModel {
   const legend = requiresLey27618Legend(input.cbteTipo, input.condicionIvaReceptorId);
@@ -94,15 +107,15 @@ export function buildInvoicePdfModel(input: InvoicePdfInput): PdfContentModel {
     homologacion: input.environment === "homologacion",
     qrUrl: buildInvoiceQrUrl(input),
     lines: [
-      { label: "Comprobante", value: String(input.cbteTipo) },
+      { label: "Comprobante", value: comprobanteTitle(input.cbteTipo) },
       { label: "Punto de Venta", value: String(input.ptoVta).padStart(5, "0") },
       { label: "N\u00FAmero", value: `${String(input.ptoVta).padStart(5, "0")}-${String(input.cbteNro).padStart(8, "0")}` },
-      { label: "Fecha", value: input.fechaEmision },
+      { label: "Fecha", value: printableDate(input.fechaEmision) },
       { label: "Receptor", value: input.receptorRazonSocial },
       { label: "Documento", value: input.receptorDocTipo === 99 ? "Sin identificar (99 / 0)" : `${input.receptorDocTipo === 80 ? "CUIT" : "Tipo " + input.receptorDocTipo} ${input.receptorDocNro}` },
       { label: "Importe", value: formatCentavos(input.importeTotal) },
       { label: "CAE", value: input.cae },
-      { label: "CAE Vencimiento", value: input.caeFchVto },
+      { label: "CAE Vencimiento", value: printableDate(input.caeFchVto) },
       ...(input.associated ? [{ label: "Comprobante asociado", value: `${input.associated.cbteTipo} ${String(input.associated.ptoVta).padStart(5, "0")}-${String(input.associated.cbteNro).padStart(8, "0")}` }] : []),
     ],
     includesLey27618Legend: legend,
@@ -189,10 +202,14 @@ export async function renderInvoicePdf(
   encodeQr: QrEncoder = encodeQrPng,
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  const page = doc.addPage([595, 842]); // A4 portrait
+  let page = doc.addPage([...PDF_PAGE_SIZE]);
   const font = await doc.embedFont(StandardFonts.Helvetica);
 
   let y = 800;
+  // Reserve a footer band on every page so content cannot overlap the QR.
+  function ensureTextSpace() {
+    if (y < 200) { page = doc.addPage([...PDF_PAGE_SIZE]); y = 800; }
+  }
   if (model.issuer) {
     page.drawText(model.issuer.name, { x: 50, y, size: 16, font });
     y -= 20;
@@ -204,6 +221,7 @@ export async function renderInvoicePdf(
     y -= 30;
   }
   for (const line of model.lines) {
+    ensureTextSpace();
     page.drawText(`${line.label}: ${line.value}`, { x: 50, y, size: 11, font });
     y -= 20;
   }
@@ -213,6 +231,7 @@ export async function renderInvoicePdf(
     page.drawText("Items", { x: 50, y, size: 11, font });
     y -= 18;
     for (const item of model.itemLines) {
+      ensureTextSpace();
       page.drawText(`${item.description}: ${item.amount}`, { x: 50, y, size: 10, font });
       y -= 16;
     }
@@ -220,19 +239,21 @@ export async function renderInvoicePdf(
   if (model.totals?.length) {
     y -= 4;
     for (const total of model.totals) {
+      ensureTextSpace();
       page.drawText(`${total.label}: ${total.value}`, { x: 300, y, size: 10, font });
       y -= 15;
     }
   }
 
   if (model.includesLey27618Legend) {
+    ensureTextSpace();
     page.drawText(LEY_27618_LEGEND, { x: 50, y: y - 4, size: 9, font });
     y -= 30;
   }
 
   const qrPng = await encodeQr(model.qrUrl);
   const qrImage = await doc.embedPng(qrPng);
-  page.drawImage(qrImage, { x: 420, y: 740, width: 120, height: 120 });
+  page.drawImage(qrImage, PDF_QR_BOUNDS);
 
   return doc.save();
 }

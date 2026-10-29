@@ -109,9 +109,15 @@ describe("invoice PDF — RG 4892 QR + CAE + due date + Ley 27.618 legend", () =
     const model = buildInvoicePdfModel(base);
     const values = model.lines.map((l) => l.value);
     expect(values).toContain(base.cae);
-    expect(values).toContain(base.caeFchVto);
+    expect(values).toContain("02/10/2026");
     expect(values).toContain("1210.00"); // formatCentavos(121000)
     expect(values).toContain("PAGADOR S.A.");
+  });
+  it("formats compact ARCA expiry dates without changing QR fiscal dates", () => {
+    const model = buildInvoicePdfModel({ ...base, cbteTipo: 8, caeFchVto: "20261108" });
+    expect(model.lines).toContainEqual({ label: "Comprobante", value: "NOTA DE CREDITO B (008)" });
+    expect(model.lines).toContainEqual({ label: "CAE Vencimiento", value: "08/11/2026" });
+    expect(decodeQrPayload(model.qrUrl.slice(QR_BASE_URL.length)).fecha).toBe(base.fechaEmision);
   });
 
   it("renders a valid PDF and encodes the exact QR URL (injected encoder)", async () => {
