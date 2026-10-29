@@ -21,10 +21,12 @@ function newKey() {
   return crypto.randomUUID();
 }
 
-export default function EmissionForm({ environment }: { environment: Environment }) {
+interface Company { id: string; razonSocial: string; cuit: string }
+
+export default function EmissionForm({ environment, companies }: { environment: Environment; companies: Company[] }) {
   const [idempotencyKey, setIdempotencyKey] = useState(newKey);
   const [item, setItem] = useState<Item>({ descripcion: "", neto: "", alicuota: "21" });
-  const [form, setForm] = useState({ empresaId: "", emisorCuit: "", emisorCondicionIva: "ri", cbteTipo: "1", ptoVta: "1", concepto: "1", docTipo: "99", docNro: "0", condicionIvaReceptor: "5", fecha: new Date().toISOString().slice(0, 10) });
+  const [form, setForm] = useState({ empresaId: "", cbteTipo: "1", ptoVta: "1", concepto: "1", docTipo: "99", docNro: "0", condicionIvaReceptor: "5", fecha: new Date().toISOString().slice(0, 10) });
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [retryAllowed, setRetryAllowed] = useState(true);
@@ -65,8 +67,8 @@ export default function EmissionForm({ environment }: { environment: Environment
   return <form className="surface form-stack" onSubmit={submit} aria-label="Formulario de emisión">
     <p className="helper-note">Clave de idempotencia: <code>{idempotencyKey}</code>. Se reutiliza durante los reintentos de esta emisión.</p>
     <div className="form-grid">
-      <label>Empresa emisora<input name="empresaId" required value={form.empresaId} onChange={(e) => update("empresaId", e.target.value)} /></label>
-      <label>CUIT emisor<input name="emisorCuit" inputMode="numeric" required value={form.emisorCuit} onChange={(e) => update("emisorCuit", e.target.value)} /></label>
+      <label>Empresa emisora<select name="empresaId" required value={form.empresaId} onChange={(e) => update("empresaId", e.target.value)}><option value="">Seleccioná una empresa</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.razonSocial} · CUIT {company.cuit}</option>)}</select></label>
+      <label>CUIT emisor<input name="emisorCuit" inputMode="numeric" readOnly value={companies.find((company) => company.id === form.empresaId)?.cuit ?? ""} aria-readonly="true" /></label>
       <label>Tipo<select name="cbteTipo" value={form.cbteTipo} onChange={(e) => update("cbteTipo", e.target.value)}><option value="1">Factura A</option><option value="6">Factura B</option><option value="11">Factura C</option></select></label>
       <label>Concepto<select name="concepto" value={form.concepto} onChange={(e) => update("concepto", e.target.value)}><option value="1">Productos</option><option value="2">Servicios</option><option value="3">Productos y servicios</option></select></label>
       <label>Punto de venta<input name="ptoVta" type="number" min="1" required value={form.ptoVta} onChange={(e) => update("ptoVta", e.target.value)} /></label>

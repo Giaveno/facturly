@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { isUuid } from "@/lib/upload/guard";
 import { getDb } from "@/lib/db/client";
-import { comprobantes } from "@/lib/db/schema";
+import { clients, comprobantes } from "@/lib/db/schema";
 import { requireAccountantSession, isUnauthorizedError } from "@/lib/auth/session";
 import { assertSameOrigin, isForbiddenOriginError } from "@/lib/auth/origin";
 import { buildArcaGateway } from "@/lib/emission/gateway";
@@ -43,7 +43,13 @@ export async function POST(req: Request): Promise<Response> {
     const headerKey = req.headers.get("Idempotency-Key")?.trim();
     const idempotencyKey = headerKey || (typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "");
     if (!idempotencyKey) return errorJson(400, "Idempotency-Key is required", correlationId);
-    const result = await emitComprobante({ db: getDb(), gateway: buildArcaGateway(getDb()), environment: undefined }, { ...body, idempotencyKey, empresaId: String(body.empresaId ?? "") } as never);
+    const empresaId = typeof body.empresaId === "string" ? body.empresaId.trim() : "";
+    if (!empresaId || !isUuid(empresaId)) return errorJson(400, "empresaId debe ser un UUID válido", correlationId);
+    const db = getDb();
+    const [empresa] = await db.select({ cuit: clients.cuit, condicionIva: clients.condicionIva }).from(clients).where(eq(clients.id, empresaId));
+    if (!empresa) return errorJson(404, "La empresa emisora no existe o no pertenece al usuario autenticado", correlationId);
+    const { emisorCuit: _ignoredCuit, emisorCondicionIva: _ignoredCondition, ...clientBody } = body;
+    const result = await emitComprobante({ db, gateway: buildArcaGateway(db), environment: undefined }, { ...clientBody, idempotencyKey, empresaId, emisorCuit: empresa.cuit, emisorCondicionIva: empresa.condicionIva } as never);
     return NextResponse.json(result, { status: result.estado === "aprobado" ? 200 : 202 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Emission failed";
