@@ -1,0 +1,1 @@
+ALTER TABLE "comprobantes" ADD CONSTRAINT "comprobantes_cbte_tipo_check" CHECK ("comprobantes"."cbte_tipo" IN (1, 3, 6, 8, 11, 13));

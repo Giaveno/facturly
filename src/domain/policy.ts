@@ -20,7 +20,27 @@ export type CondicionIVA =
   | "exento"
   | "consumidorFinal";
 
-export type CbteTipo = 1 | 6 | 11;
+/** WSFE invoice and credit-note types supported by the application. */
+export type CbteTipo = 1 | 3 | 6 | 8 | 11 | 13;
+
+export type InvoiceCbteTipo = 1 | 6 | 11;
+export type CreditNoteCbteTipo = 3 | 8 | 13;
+
+export function isCreditNoteCbteTipo(value: number): value is CreditNoteCbteTipo {
+  return value === 3 || value === 8 || value === 13;
+}
+
+export function creditNoteTypeFor(invoiceType: InvoiceCbteTipo): CreditNoteCbteTipo {
+  if (invoiceType === 1) return 3;
+  if (invoiceType === 6) return 8;
+  return 13;
+}
+
+export function invoiceTypeForCreditNote(creditType: CreditNoteCbteTipo): InvoiceCbteTipo {
+  if (creditType === 3) return 1;
+  if (creditType === 8) return 6;
+  return 11;
+}
 
 export interface CbteTipoDecision {
   cbteTipo: CbteTipo;
@@ -101,7 +121,7 @@ export function cbteTipo(
  * Fiscal-transparency presentation requirements are a separate concern.
  */
 export function discriminatesIva(cbteTipo: CbteTipo): boolean {
-  return cbteTipo === FACTURA_A;
+  return cbteTipo === FACTURA_A || cbteTipo === 3;
 }
 
 /**
@@ -117,5 +137,5 @@ export function requiresLey27618Legend(
   cbteTipo: CbteTipo,
   condicionIvaReceptorId: number,
 ): boolean {
-  return cbteTipo === FACTURA_A && condicionIvaReceptorId === RECEPTOR_IVA_MONOTRIBUTISTA;
+  return (cbteTipo === FACTURA_A || cbteTipo === 3) && condicionIvaReceptorId === RECEPTOR_IVA_MONOTRIBUTISTA;
 }

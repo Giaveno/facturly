@@ -1,0 +1,1544 @@
+{
+  "id": "cf717828-fe1d-48e5-a164-7113d1f4c19e",
+  "prevId": "3430f9b2-161f-4b04-beb6-591d3cef27c9",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.accountant": {
+      "name": "accountant",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "accountant_email_unique": {
+          "name": "accountant_email_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "email"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.audit_log": {
+      "name": "audit_log",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "actor": {
+          "name": "actor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "invoice_id": {
+          "name": "invoice_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "row_id": {
+          "name": "row_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "audit_log_invoice_id_invoices_id_fk": {
+          "name": "audit_log_invoice_id_invoices_id_fk",
+          "tableFrom": "audit_log",
+          "tableTo": "invoices",
+          "columnsFrom": [
+            "invoice_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "audit_log_row_id_ocr_rows_id_fk": {
+          "name": "audit_log_row_id_ocr_rows_id_fk",
+          "tableFrom": "audit_log",
+          "tableTo": "ocr_rows",
+          "columnsFrom": [
+            "row_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.batches": {
+      "name": "batches",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "batches_client_id_clients_id_fk": {
+          "name": "batches_client_id_clients_id_fk",
+          "tableFrom": "batches",
+          "tableTo": "clients",
+          "columnsFrom": [
+            "client_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.clients": {
+      "name": "clients",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "cuit": {
+          "name": "cuit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "razon_social": {
+          "name": "razon_social",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pto_vta": {
+          "name": "pto_vta",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "condicion_iva": {
+          "name": "condicion_iva",
+          "type": "condicion_iva",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "clients_cuit_unique": {
+          "name": "clients_cuit_unique",
+          "columns": [
+            {
+              "expression": "cuit",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.comprobantes": {
+      "name": "comprobantes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "empresa_id": {
+          "name": "empresa_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ambiente": {
+          "name": "ambiente",
+          "type": "comprobante_ambiente",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "emisor_cuit": {
+          "name": "emisor_cuit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "emisor_condicion_iva": {
+          "name": "emisor_condicion_iva",
+          "type": "comprobante_emisor_condicion_iva",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cbte_tipo": {
+          "name": "cbte_tipo",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pto_vta": {
+          "name": "pto_vta",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cbte_nro": {
+          "name": "cbte_nro",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "concepto": {
+          "name": "concepto",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "doc_tipo": {
+          "name": "doc_tipo",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "doc_nro": {
+          "name": "doc_nro",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "condicion_iva_receptor": {
+          "name": "condicion_iva_receptor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fecha": {
+          "name": "fecha",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "importe_neto_centavos": {
+          "name": "importe_neto_centavos",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "importe_iva_centavos": {
+          "name": "importe_iva_centavos",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "importe_exento_centavos": {
+          "name": "importe_exento_centavos",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "importe_tributos_centavos": {
+          "name": "importe_tributos_centavos",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "importe_total_centavos": {
+          "name": "importe_total_centavos",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "items": {
+          "name": "items",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "estado": {
+          "name": "estado",
+          "type": "comprobante_estado",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'borrador'"
+        },
+        "cae": {
+          "name": "cae",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cae_vto": {
+          "name": "cae_vto",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resultado": {
+          "name": "resultado",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "observaciones": {
+          "name": "observaciones",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "errores": {
+          "name": "errores",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "comprobante_asociado_id": {
+          "name": "comprobante_asociado_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "comprobantes_idempotency_key_unique": {
+          "name": "comprobantes_idempotency_key_unique",
+          "columns": [
+            {
+              "expression": "empresa_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "comprobantes_incierto_empresa_created_at_idx": {
+          "name": "comprobantes_incierto_empresa_created_at_idx",
+          "columns": [
+            {
+              "expression": "empresa_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "\"created_at\" desc",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "comprobantes_fiscal_identity_unique": {
+          "name": "comprobantes_fiscal_identity_unique",
+          "columns": [
+            {
+              "expression": "ambiente",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "emisor_cuit",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "pto_vta",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "cbte_tipo",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "cbte_nro",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"comprobantes\".\"cbte_nro\" IS NOT NULL AND \"comprobantes\".\"estado\" <> 'rechazado'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "comprobantes_empresa_id_clients_id_fk": {
+          "name": "comprobantes_empresa_id_clients_id_fk",
+          "tableFrom": "comprobantes",
+          "tableTo": "clients",
+          "columnsFrom": [
+            "empresa_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "comprobantes_comprobante_asociado_id_comprobantes_id_fk": {
+          "name": "comprobantes_comprobante_asociado_id_comprobantes_id_fk",
+          "tableFrom": "comprobantes",
+          "tableTo": "comprobantes",
+          "columnsFrom": [
+            "comprobante_asociado_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "comprobantes_emisor_cuit_check": {
+          "name": "comprobantes_emisor_cuit_check",
+          "value": "\"comprobantes\".\"emisor_cuit\" ~ '^[0-9]{11}$'"
+        },
+        "comprobantes_pto_vta_check": {
+          "name": "comprobantes_pto_vta_check",
+          "value": "\"comprobantes\".\"pto_vta\" BETWEEN 1 AND 99999"
+        },
+        "comprobantes_cbte_nro_check": {
+          "name": "comprobantes_cbte_nro_check",
+          "value": "\"comprobantes\".\"cbte_nro\" IS NULL OR \"comprobantes\".\"cbte_nro\" BETWEEN 1 AND 99999999"
+        },
+        "comprobantes_cbte_tipo_check": {
+          "name": "comprobantes_cbte_tipo_check",
+          "value": "\"comprobantes\".\"cbte_tipo\" IN (1, 3, 6, 8, 11, 13)"
+        },
+        "comprobantes_concepto_check": {
+          "name": "comprobantes_concepto_check",
+          "value": "\"comprobantes\".\"concepto\" IN (1, 2, 3)"
+        },
+        "comprobantes_aprobado_requirements_check": {
+          "name": "comprobantes_aprobado_requirements_check",
+          "value": "\"comprobantes\".\"estado\" <> 'aprobado' OR (\"comprobantes\".\"cae\" IS NOT NULL AND \"comprobantes\".\"cae_vto\" IS NOT NULL AND \"comprobantes\".\"cbte_nro\" IS NOT NULL)"
+        },
+        "comprobantes_pendiente_requirements_check": {
+          "name": "comprobantes_pendiente_requirements_check",
+          "value": "\"comprobantes\".\"estado\" <> 'pendiente' OR \"comprobantes\".\"cbte_nro\" IS NOT NULL"
+        },
+        "comprobantes_incierto_require_number_check": {
+          "name": "comprobantes_incierto_require_number_check",
+          "value": "\"comprobantes\".\"estado\" <> 'incierto' OR \"comprobantes\".\"cbte_nro\" IS NOT NULL"
+        },
+        "comprobantes_importes_non_negative_check": {
+          "name": "comprobantes_importes_non_negative_check",
+          "value": "\"comprobantes\".\"importe_neto_centavos\" >= 0 AND \"comprobantes\".\"importe_iva_centavos\" >= 0 AND \"comprobantes\".\"importe_exento_centavos\" >= 0 AND \"comprobantes\".\"importe_tributos_centavos\" >= 0 AND \"comprobantes\".\"importe_total_centavos\" >= 0"
+        },
+        "comprobantes_importes_total_check": {
+          "name": "comprobantes_importes_total_check",
+          "value": "\"comprobantes\".\"importe_total_centavos\" = \"comprobantes\".\"importe_neto_centavos\" + \"comprobantes\".\"importe_iva_centavos\" + \"comprobantes\".\"importe_exento_centavos\" + \"comprobantes\".\"importe_tributos_centavos\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.credentials": {
+      "name": "credentials",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'singleton'"
+        },
+        "cert_pem": {
+          "name": "cert_pem",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_ciphertext": {
+          "name": "key_ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "iv": {
+          "name": "iv",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth_tag": {
+          "name": "auth_tag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "credentials_singleton_unique": {
+          "name": "credentials_singleton_unique",
+          "columns": [
+            {
+              "expression": "scope",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.delegations": {
+      "name": "delegations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cuit": {
+          "name": "cuit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        }
+      },
+      "indexes": {
+        "delegations_client_unique": {
+          "name": "delegations_client_unique",
+          "columns": [
+            {
+              "expression": "client_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "delegations_client_id_clients_id_fk": {
+          "name": "delegations_client_id_clients_id_fk",
+          "tableFrom": "delegations",
+          "tableTo": "clients",
+          "columnsFrom": [
+            "client_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.diagnostic_issuance": {
+      "name": "diagnostic_issuance",
+      "schema": "",
+      "columns": {
+        "tuple_key": {
+          "name": "tuple_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "authorization_hash": {
+          "name": "authorization_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.emission_series_claims": {
+      "name": "emission_series_claims",
+      "schema": "",
+      "columns": {
+        "series_key": {
+          "name": "series_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "owner": {
+          "name": "owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lease_expires_at_ms": {
+          "name": "lease_expires_at_ms",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "uncertain": {
+          "name": "uncertain",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "uncertain_since_ms": {
+          "name": "uncertain_since_ms",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.invoices": {
+      "name": "invoices",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "ocr_row_id": {
+          "name": "ocr_row_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "invoice_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
+        "cbte_tipo": {
+          "name": "cbte_tipo",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "approval_snapshot": {
+          "name": "approval_snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discard_reason": {
+          "name": "discard_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "receptor_doc_tipo": {
+          "name": "receptor_doc_tipo",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "receptor_doc_nro": {
+          "name": "receptor_doc_nro",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "condicion_iva_receptor_id": {
+          "name": "condicion_iva_receptor_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "receptor_razon_social": {
+          "name": "receptor_razon_social",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fecha_emision": {
+          "name": "fecha_emision",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fecha_vto": {
+          "name": "fecha_vto",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "moneda": {
+          "name": "moneda",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cotizacion": {
+          "name": "cotizacion",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "importe_neto_centavos": {
+          "name": "importe_neto_centavos",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "importe_iva_centavos": {
+          "name": "importe_iva_centavos",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tax_rate": {
+          "name": "tax_rate",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "importe_total_centavos": {
+          "name": "importe_total_centavos",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "invoices_ocr_row_id_ocr_rows_id_fk": {
+          "name": "invoices_ocr_row_id_ocr_rows_id_fk",
+          "tableFrom": "invoices",
+          "tableTo": "ocr_rows",
+          "columnsFrom": [
+            "ocr_row_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "invoices_client_id_clients_id_fk": {
+          "name": "invoices_client_id_clients_id_fk",
+          "tableFrom": "invoices",
+          "tableTo": "clients",
+          "columnsFrom": [
+            "client_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "invoices_cbte_tipo_check": {
+          "name": "invoices_cbte_tipo_check",
+          "value": "\"invoices\".\"cbte_tipo\" IN (1, 6, 11)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.issued_invoices": {
+      "name": "issued_invoices",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "invoice_id": {
+          "name": "invoice_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cuit": {
+          "name": "cuit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pto_vta": {
+          "name": "pto_vta",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cbte_tipo": {
+          "name": "cbte_tipo",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cbte_nro": {
+          "name": "cbte_nro",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cae": {
+          "name": "cae",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cae_fch_vto": {
+          "name": "cae_fch_vto",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "importe_total_centavos": {
+          "name": "importe_total_centavos",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "issued_invoices_invoice_id_unique": {
+          "name": "issued_invoices_invoice_id_unique",
+          "columns": [
+            {
+              "expression": "invoice_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "issued_invoices_invoice_id_invoices_id_fk": {
+          "name": "issued_invoices_invoice_id_invoices_id_fk",
+          "tableFrom": "issued_invoices",
+          "tableTo": "invoices",
+          "columnsFrom": [
+            "invoice_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "issued_invoices_idempotency": {
+          "name": "issued_invoices_idempotency",
+          "nullsNotDistinct": true,
+          "columns": [
+            "environment",
+            "cuit",
+            "pto_vta",
+            "cbte_tipo",
+            "cbte_nro"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "issued_invoices_environment_check": {
+          "name": "issued_invoices_environment_check",
+          "value": "\"issued_invoices\".\"environment\" IN ('homologacion', 'production')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ocr_rows": {
+      "name": "ocr_rows",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "photo_id": {
+          "name": "photo_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fields": {
+          "name": "fields",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cuit": {
+          "name": "cuit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cuit_source": {
+          "name": "cuit_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recipient_mode": {
+          "name": "recipient_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'consumer_final'"
+        },
+        "recipient_mode_source": {
+          "name": "recipient_mode_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'upload_default'"
+        },
+        "tax_rate": {
+          "name": "tax_rate",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "ocr_row_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ocr_rows_photo_id_photos_id_fk": {
+          "name": "ocr_rows_photo_id_photos_id_fk",
+          "tableFrom": "ocr_rows",
+          "tableTo": "photos",
+          "columnsFrom": [
+            "photo_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ocr_rows_cuit_source_check": {
+          "name": "ocr_rows_cuit_source_check",
+          "value": "\"ocr_rows\".\"cuit_source\" IN ('ocr', 'registry', 'manual')"
+        },
+        "ocr_rows_recipient_mode_check": {
+          "name": "ocr_rows_recipient_mode_check",
+          "value": "\"ocr_rows\".\"recipient_mode\" IN ('consumer_final', 'identified')"
+        },
+        "ocr_rows_tax_rate_check": {
+          "name": "ocr_rows_tax_rate_check",
+          "value": "\"ocr_rows\".\"tax_rate\" IN (10.5, 21, 27)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.payers": {
+      "name": "payers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "cbu": {
+          "name": "cbu",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cvu": {
+          "name": "cvu",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "alias": {
+          "name": "alias",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cuit": {
+          "name": "cuit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "learned_from": {
+          "name": "learned_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'manual'"
+        }
+      },
+      "indexes": {
+        "payers_cbu_unique": {
+          "name": "payers_cbu_unique",
+          "columns": [
+            {
+              "expression": "cbu",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"payers\".\"cbu\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "payers_cvu_unique": {
+          "name": "payers_cvu_unique",
+          "columns": [
+            {
+              "expression": "cvu",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"payers\".\"cvu\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "payers_alias_unique": {
+          "name": "payers_alias_unique",
+          "columns": [
+            {
+              "expression": "alias",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"payers\".\"alias\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.photos": {
+      "name": "photos",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "batch_id": {
+          "name": "batch_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "storage_key": {
+          "name": "storage_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "photos_batch_id_batches_id_fk": {
+          "name": "photos_batch_id_batches_id_fk",
+          "tableFrom": "photos",
+          "tableTo": "batches",
+          "columnsFrom": [
+            "batch_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.receipt_cleanup": {
+      "name": "receipt_cleanup",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "row_id": {
+          "name": "row_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "storage_key": {
+          "name": "storage_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "receipt_cleanup_row_id_unique": {
+          "name": "receipt_cleanup_row_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "row_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.ta_cache": {
+      "name": "ta_cache",
+      "schema": "",
+      "columns": {
+        "service": {
+          "name": "service",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "token": {
+          "name": "token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sign": {
+          "name": "sign",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at_ms": {
+          "name": "expires_at_ms",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issued_at_ms": {
+          "name": "issued_at_ms",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.comprobante_ambiente": {
+      "name": "comprobante_ambiente",
+      "schema": "public",
+      "values": [
+        "homologacion",
+        "produccion"
+      ]
+    },
+    "public.comprobante_emisor_condicion_iva": {
+      "name": "comprobante_emisor_condicion_iva",
+      "schema": "public",
+      "values": [
+        "ri",
+        "monotributista",
+        "exento"
+      ]
+    },
+    "public.comprobante_estado": {
+      "name": "comprobante_estado",
+      "schema": "public",
+      "values": [
+        "borrador",
+        "pendiente",
+        "aprobado",
+        "rechazado",
+        "incierto"
+      ]
+    },
+    "public.condicion_iva": {
+      "name": "condicion_iva",
+      "schema": "public",
+      "values": [
+        "ri",
+        "monotributista",
+        "exento",
+        "consumidorFinal"
+      ]
+    },
+    "public.invoice_status": {
+      "name": "invoice_status",
+      "schema": "public",
+      "values": [
+        "PENDING",
+        "REVIEWED",
+        "APPROVED",
+        "EMITTING",
+        "EMITTED",
+        "REJECTED",
+        "EMIT_ERROR",
+        "EMIT_FAILED"
+      ]
+    },
+    "public.ocr_row_status": {
+      "name": "ocr_row_status",
+      "schema": "public",
+      "values": [
+        "PENDING",
+        "CONFIDENT",
+        "BLOCKED",
+        "CORRECTED",
+        "FAILED"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

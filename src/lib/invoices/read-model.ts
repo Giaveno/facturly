@@ -139,10 +139,16 @@ export async function loadApprovedComprobantePdfInput(
     receptorRazonSocial: clients.razonSocial, neto: comprobantes.importeNetoCentavos,
     iva: comprobantes.importeIvaCentavos, exento: comprobantes.importeExentoCentavos,
     tributos: comprobantes.importeTributosCentavos, total: comprobantes.importeTotalCentavos,
-    items: comprobantes.items, cae: comprobantes.cae, caeVto: comprobantes.caeVto,
+    items: comprobantes.items, cae: comprobantes.cae, caeVto: comprobantes.caeVto, comprobanteAsociadoId: comprobantes.comprobanteAsociadoId,
   }).from(comprobantes).innerJoin(clients, eq(comprobantes.empresaId, clients.id)).where(and(...conditions));
   if (!row || !row.cae || !row.caeVto || row.cbteNro == null) return null;
   if ([row.neto, row.iva, row.exento, row.tributos, row.total, row.condicionIvaReceptor].some((v) => v == null)) return null;
+  let associated: ComprobantePdfInput["associated"];
+  if (row.comprobanteAsociadoId) {
+    const [original] = await db.select({ cbteTipo: comprobantes.cbteTipo, ptoVta: comprobantes.ptoVta, cbteNro: comprobantes.cbteNro })
+      .from(comprobantes).where(eq(comprobantes.id, row.comprobanteAsociadoId));
+    if (original?.cbteNro != null) associated = { cbteTipo: original.cbteTipo, ptoVta: original.ptoVta, cbteNro: original.cbteNro };
+  }
   return {
     empresaId: row.empresaId, issuerName: row.issuerName, issuerCuit: row.issuerCuit,
     environment: row.environment, cbteTipo: row.cbteTipo as CbteTipo, ptoVta: row.ptoVta,
@@ -153,6 +159,6 @@ export async function loadApprovedComprobantePdfInput(
     condicionIvaReceptor: row.condicionIvaReceptor!,
     importeNetoCentavos: row.neto!, importeIvaCentavos: row.iva!, importeExentoCentavos: row.exento!,
     importeTributosCentavos: row.tributos!, importeTotalCentavos: row.total!,
-    items: (Array.isArray(row.items) ? row.items : []) as ComprobanteItem[], cae: row.cae, caeVto: row.caeVto,
+    items: (Array.isArray(row.items) ? row.items : []) as ComprobanteItem[], cae: row.cae, caeVto: row.caeVto, associated,
   };
 }

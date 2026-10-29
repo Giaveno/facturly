@@ -132,11 +132,11 @@ export function validateComprobante(input: ComprobanteValidationInput): Validate
   if (!emisorCondicionIva || !["ri", "monotributista", "exento"].includes(emisorCondicionIva)) {
     issues.push("La condición IVA del emisor no es válida");
   }
-  if (![1, 6, 11].includes(input.cbteTipo)) issues.push("CbteTipo no admitido");
-  if (emisorCondicionIva === "ri" && ![1, 6].includes(input.cbteTipo)) {
+  if (![1, 3, 6, 8, 11, 13].includes(input.cbteTipo)) issues.push("CbteTipo no admitido");
+  if (emisorCondicionIva === "ri" && ![1, 3, 6, 8].includes(input.cbteTipo)) {
     issues.push("Un emisor RI solo puede emitir comprobantes A o B");
   }
-  if (["monotributista", "exento"].includes(emisorCondicionIva ?? "") && input.cbteTipo !== 11) {
+  if (["monotributista", "exento"].includes(emisorCondicionIva ?? "") && ![11, 13].includes(input.cbteTipo)) {
     issues.push("Un emisor monotributista o exento solo puede emitir comprobantes C");
   }
   if (!Number.isInteger(input.ptoVta) || input.ptoVta < 1 || input.ptoVta > 99999) issues.push("PtoVta no es válido");
@@ -187,7 +187,7 @@ export function validateComprobante(input: ComprobanteValidationInput): Validate
     }
     const hasValidRate = (TAX_RATES as readonly number[]).includes(item.alicuota);
     if (!hasValidRate) issues.push(`Ítem ${index + 1}: alícuota no admitida`);
-    if (input.cbteTipo === 11 && (item.ivaCentavos !== 0 || item.alicuota !== 0)) issues.push(`Ítem ${index + 1}: Factura C no puede discriminar IVA`);
+    if ((input.cbteTipo === 11 || input.cbteTipo === 13) && (item.ivaCentavos !== 0 || item.alicuota !== 0)) issues.push(`Ítem ${index + 1}: Factura C no puede discriminar IVA`);
     if (hasValidRate && item.alicuota === 0 && item.ivaCentavos !== 0) issues.push(`Ítem ${index + 1}: IVA debe ser cero sin alícuota`);
     if (hasValidRate && item.alicuota !== 0 && item.ivaCentavos !== expectedIva(item.netoCentavos, item.alicuota)) issues.push(`Ítem ${index + 1}: IVA incoherente con la alícuota`);
     if (item.totalCentavos !== item.netoCentavos + item.ivaCentavos + item.exentoCentavos + item.tributosCentavos) issues.push(`Ítem ${index + 1}: total incoherente`);

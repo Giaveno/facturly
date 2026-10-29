@@ -50,6 +50,8 @@ export interface FECAEReq {
   importeTotal: Centavos;
   /** Explicit single taxable rate; mandatory for newly approved A/B. */
   taxRate?: number | null;
+  /** Original invoice referenced by a credit note (WSFEv1 CbtesAsoc). */
+  cbtesAsoc?: Array<{ tipo: number; ptoVta: number; nro: number }>;
 }
 
 /** Successful emission result. */

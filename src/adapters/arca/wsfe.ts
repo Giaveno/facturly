@@ -25,6 +25,7 @@ import { formatCentavos } from "@/domain/money";
 import { escapeXml, validateMonId } from "./xml";
 import type { FECAEReq } from "@/ports/arca-gateway";
 import { deriveAmounts } from "@/domain/amounts";
+import { invoiceTypeForCreditNote, isCreditNoteCbteTipo } from "@/domain/policy";
 
 /** WSFEv1 authentication header. */
 export interface WsfeAuth {
@@ -71,6 +72,7 @@ export interface FecaesolicitarRequest {
   monId: string;
   monCotiz: number;
   iva: IvaAlicuota[];
+  cbtesAsoc?: Array<{ tipo: number; ptoVta: number; nro: number }>;
 }
 
 /** An ARCA observation or error (code + message). */
@@ -177,8 +179,9 @@ function envelope(operationBody: string): string {
  * C carries no IVA array element at all (ARCA10071).
  */
 export function fecaReqToSolicitar(req: FECAEReq): FecaesolicitarRequest {
-  if (req.cbteTipo === 6 && ![10.5,21,27].includes(req.taxRate ?? -1)) throw new Error("Factura B requires an explicit supported taxable rate");
-  if (req.cbteTipo === 11 && (req.importeIva !== 0 || req.importeNeto !== req.importeTotal)) throw new Error("Factura C cannot include IVA");
+  const invoiceType = isCreditNoteCbteTipo(req.cbteTipo) ? invoiceTypeForCreditNote(req.cbteTipo) : req.cbteTipo;
+  if (invoiceType === 6 && ![10.5,21,27].includes(req.taxRate ?? -1)) throw new Error("Factura B requires an explicit supported taxable rate");
+  if (invoiceType === 11 && (req.importeIva !== 0 || req.importeNeto !== req.importeTotal)) throw new Error("Factura C cannot include IVA");
   const amounts = deriveAmounts(req.importeTotal, req.cbteTipo, req.taxRate);
   if (amounts.net !== req.importeNeto || amounts.iva !== req.importeIva) throw new Error("Invoice IVA amounts do not match the selected taxable rate");
   return {
@@ -197,7 +200,7 @@ export function fecaReqToSolicitar(req: FECAEReq): FecaesolicitarRequest {
     monId: req.moneda,
     monCotiz: req.cotizacion,
     iva:
-      req.cbteTipo !== 11
+      invoiceType !== 11
         ? [
             {
                 id: req.taxRate === 10.5 ? 4 : req.taxRate === 27 ? 6 : 5,
@@ -206,6 +209,7 @@ export function fecaReqToSolicitar(req: FECAEReq): FecaesolicitarRequest {
             },
           ]
         : [],
+    cbtesAsoc: req.cbtesAsoc,
   };
 }
 
@@ -224,6 +228,9 @@ export function buildFecaesolicitarEnvelope(
         "</ar:AlicIva>",
     )
     .join("");
+  const associated = (req.cbtesAsoc ?? []).map((a) =>
+    `<ar:CbteAsoc><ar:Tipo>${a.tipo}</ar:Tipo><ar:PtoVta>${a.ptoVta}</ar:PtoVta><ar:Nro>${a.nro}</ar:Nro></ar:CbteAsoc>`,
+  ).join("");
 
   const body =
     "<ar:FECAESolicitar>" +
@@ -253,7 +260,8 @@ export function buildFecaesolicitarEnvelope(
     `<ar:MonId>${escapeXml(validateMonId(req.monId))}</ar:MonId>` +
     `<ar:MonCotiz>${req.monCotiz}</ar:MonCotiz>` +
     `<ar:CondicionIVAReceptorId>${req.condicionIvaReceptorId}</ar:CondicionIVAReceptorId>` +
-    (req.cbteTipo === 11 ? "" : `<ar:Iva>${ivaItems}</ar:Iva>`) +
+    (associated ? `<ar:CbtesAsoc>${associated}</ar:CbtesAsoc>` : "") +
+    (req.cbteTipo === 11 || req.cbteTipo === 13 ? "" : `<ar:Iva>${ivaItems}</ar:Iva>`) +
     "</ar:FECAEDetRequest>" +
     "</ar:FeDetReq>" +
     "</ar:FeCAEReq>" +

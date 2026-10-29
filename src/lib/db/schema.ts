@@ -451,6 +451,7 @@ export const comprobantes = pgTable(
     check("comprobantes_emisor_cuit_check", sql`${table.emisorCuit} ~ '^[0-9]{11}$'`),
     check("comprobantes_pto_vta_check", sql`${table.ptoVta} BETWEEN 1 AND 99999`),
     check("comprobantes_cbte_nro_check", sql`${table.cbteNro} IS NULL OR ${table.cbteNro} BETWEEN 1 AND 99999999`),
+    check("comprobantes_cbte_tipo_check", sql`${table.cbteTipo} IN (1, 3, 6, 8, 11, 13)`),
     check("comprobantes_concepto_check", sql`${table.concepto} IN (1, 2, 3)`),
     check("comprobantes_aprobado_requirements_check", sql`${table.estado} <> 'aprobado' OR (${table.cae} IS NOT NULL AND ${table.caeVto} IS NOT NULL AND ${table.cbteNro} IS NOT NULL)`),
     check("comprobantes_pendiente_requirements_check", sql`${table.estado} <> 'pendiente' OR ${table.cbteNro} IS NOT NULL`),

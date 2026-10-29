@@ -8,6 +8,7 @@ import type { ArcaGateway, FECAEReq, IssueInvoiceResult } from "@/ports/arca-gat
 import { resolveArcaEnvironment } from "./environment";
 import { acquireExpiredSeriesClaim, acquireSeriesClaim, finishSeriesClaim, ownsSeriesClaim, reconcileSeriesClaim, SERIES_LEASE_MS, seriesKey } from "./series-claim";
 import { arcaTimeouts } from "@/adapters/arca/timeouts";
+import { creditNoteTypeFor, isCreditNoteCbteTipo, type InvoiceCbteTipo } from "@/domain/policy";
 type SeriesClaim = typeof emissionSeriesClaims.$inferSelect;
 
 export const RECONCILIATION_NOT_FOUND_REASON = "ARCA no encontró el comprobante reservado; no se reemitirá automáticamente.";
@@ -25,6 +26,8 @@ export class ComprobanteEmissionError extends Error {
 export interface ComprobanteEmissionInput extends Omit<ComprobanteValidationInput, "ambiente" | "estado" | "cae" | "caeVto"> {
   empresaId: string;
   idempotencyKey: string;
+  /** When present, emit a credit note against this approved invoice. */
+  comprobanteAsociadoId?: string;
 }
 export interface ComprobanteEmissionDeps {
   db: Db;
@@ -114,7 +117,54 @@ export function uncertainGraceMs(environment: ComprobanteAmbiente | "production"
 }
 function taxRate(items: ComprobanteItem[]): number | null { return items.find((item) => item.alicuota !== 0)?.alicuota ?? 0; }
 
-export function comprobanteToFecaReq(row: typeof comprobantes.$inferSelect): FECAEReq {
+type CreditNoteAssociation = { tipo: InvoiceCbteTipo; ptoVta: number; nro: number };
+
+/** Pure mapping from a persisted comprobante row to its WSFE request. */
+function fecaAssociation(original: CreditNoteAssociation | undefined): Array<{ tipo: number; ptoVta: number; nro: number }> | undefined {
+  return original ? [{ tipo: original.tipo, ptoVta: original.ptoVta, nro: original.nro }] : undefined;
+}
+
+async function validateCreditNote(
+  db: Db,
+  input: ComprobanteEmissionInput,
+  validated: ComprobanteValidationInput & { emisorCondicionIva: NonNullable<ComprobanteValidationInput["emisorCondicionIva"]> },
+): Promise<CreditNoteAssociation | undefined> {
+  if (!input.comprobanteAsociadoId) {
+    if (isCreditNoteCbteTipo(validated.cbteTipo)) throw new ComprobanteEmissionError("La nota de crédito requiere un comprobante original aprobado.");
+    return undefined;
+  }
+  if (!isCreditNoteCbteTipo(validated.cbteTipo)) throw new ComprobanteEmissionError("El comprobante asociado solo puede usarse en una nota de crédito.");
+  const [original] = await db.select().from(comprobantes).where(eq(comprobantes.id, input.comprobanteAsociadoId));
+  if (!original || original.estado !== "aprobado" || original.cae == null || original.caeVto == null || original.cbteNro == null) {
+    throw new ComprobanteEmissionError("El comprobante original debe estar aprobado por ARCA.");
+  }
+  if (original.empresaId !== input.empresaId || original.emisorCuit !== validated.emisorCuit) {
+    throw new ComprobanteEmissionError("El comprobante original pertenece a otra empresa o emisor.");
+  }
+  if (original.ambiente !== validated.ambiente || original.ptoVta !== validated.ptoVta) {
+    throw new ComprobanteEmissionError("El comprobante original no pertenece al mismo ambiente o punto de venta.");
+  }
+  if (original.docTipo !== validated.docTipo || original.docNro !== validated.docNro || original.condicionIvaReceptor !== validated.condicionIvaReceptor) {
+    throw new ComprobanteEmissionError("La nota de crédito debe conservar el receptor del comprobante original.");
+  }
+  if (original.cbteTipo !== 1 && original.cbteTipo !== 6 && original.cbteTipo !== 11) {
+    throw new ComprobanteEmissionError("El comprobante asociado debe ser una factura válida.");
+  }
+  const expectedType = creditNoteTypeFor(original.cbteTipo as InvoiceCbteTipo);
+  if (validated.cbteTipo !== expectedType) {
+    throw new ComprobanteEmissionError(`El tipo de nota de crédito no coincide con el comprobante original (se esperaba ${expectedType}).`);
+  }
+  const approvedNotes = await db.select({ total: comprobantes.importeTotalCentavos }).from(comprobantes).where(and(
+    eq(comprobantes.comprobanteAsociadoId, original.id), eq(comprobantes.estado, "aprobado"),
+  ));
+  const cumulative = approvedNotes.reduce((sum, note) => sum + (note.total ?? 0), 0);
+  if (cumulative + validated.importeTotalCentavos > original.importeTotalCentavos) {
+    throw new ComprobanteEmissionError("El total acumulado de notas de crédito supera el comprobante original.");
+  }
+  return { tipo: original.cbteTipo as InvoiceCbteTipo, ptoVta: original.ptoVta, nro: original.cbteNro };
+}
+
+export function comprobanteToFecaReq(row: typeof comprobantes.$inferSelect, original?: CreditNoteAssociation): FECAEReq {
   const docNro = Number(row.docNro);
   if (!Number.isSafeInteger(docNro)) throw new ComprobanteEmissionError("DocNro excede el rango admitido por WSFE.");
   return {
@@ -123,6 +173,7 @@ export function comprobanteToFecaReq(row: typeof comprobantes.$inferSelect): FEC
     receptorRazonSocial: "", fechaEmision: row.fecha, fechaVto: row.fecha, moneda: "PES", cotizacion: 1,
     importeNeto: row.importeNetoCentavos, importeIva: row.importeIvaCentavos, importeTotal: row.importeTotalCentavos,
     taxRate: taxRate((row.items ?? []) as ComprobanteItem[]),
+    cbtesAsoc: fecaAssociation(original),
   };
 }
 function rejectionReason(error: ArcaBusinessError): string { return `${error.code ? `Código ARCA ${error.code}` : "Rechazo ARCA"}: ${error.message}`; }
@@ -139,6 +190,13 @@ function isDefinitiveRejection(error: unknown): error is ArcaBusinessError {
 async function readByIdempotency(db: Db, empresaId: string, key: string) {
   const [row] = await db.select().from(comprobantes).where(and(eq(comprobantes.empresaId, empresaId), eq(comprobantes.idempotencyKey, key)));
   return row;
+}
+async function associationForRow(db: Db, row: typeof comprobantes.$inferSelect): Promise<CreditNoteAssociation | undefined> {
+  if (!row.comprobanteAsociadoId) return undefined;
+  const [original] = await db.select({ tipo: comprobantes.cbteTipo, ptoVta: comprobantes.ptoVta, nro: comprobantes.cbteNro })
+    .from(comprobantes).where(eq(comprobantes.id, row.comprobanteAsociadoId));
+  if (!original || original.nro == null) return undefined;
+  return { tipo: original.tipo as InvoiceCbteTipo, ptoVta: original.ptoVta, nro: original.nro };
 }
 async function readOrphans(db: Db, key: string, environment: ComprobanteAmbiente, emisorCuit: string, ptoVta: number, cbteTipo: number) {
   return withSeriesLock(db, key, async (tx) => tx.select().from(comprobantes).where(and(
@@ -160,7 +218,7 @@ async function reconcileOrphans(db: Db, deps: ComprobanteEmissionDeps, key: stri
       throw new ComprobanteEmissionError(RECONCILIATION_UNCERTAIN_REASON);
     }
     try {
-      const result = await deps.gateway.consultInvoice(comprobanteToFecaReq(row));
+      const result = await deps.gateway.consultInvoice(comprobanteToFecaReq(row, await associationForRow(db, row)));
       if (!result) await updateOrphan(db, key, row.id, { estado: "rechazado", resultado: "R", errores: RECONCILIATION_NOT_FOUND_REASON });
       else if (!isMatchingResult(row, result)) await updateOrphan(db, key, row.id, { estado: "rechazado", resultado: "R", errores: RECONCILIATION_MISMATCH_REASON });
       else if (!result.cae || !result.caeFchVto) {
@@ -235,6 +293,19 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
   const validated = validateComprobante({ ...input, ambiente: environment, estado: "borrador" });
   assertArcaDateWindow(validated.fecha, now());
   if (!input.idempotencyKey.trim()) throw new ComprobanteEmissionError("La clave de idempotencia es obligatoria.");
+  const existingPreflight = await readByIdempotency(deps.db, input.empresaId, input.idempotencyKey);
+  if (existingPreflight) {
+    const sameTuple = existingPreflight.ambiente === environment && existingPreflight.emisorCuit === validated.emisorCuit && existingPreflight.ptoVta === validated.ptoVta && existingPreflight.cbteTipo === validated.cbteTipo;
+    if (!sameTuple) throw new ComprobanteEmissionError(IDEMPOTENCY_CONFLICT_REASON);
+    if (existingPreflight.estado === "aprobado" || existingPreflight.estado === "rechazado") return resultFromRow(existingPreflight, false);
+    if (existingPreflight.estado === "borrador") throw new ComprobanteEmissionError("El comprobante existente está en borrador y requiere aprobación explícita.");
+    // Pending/incierto reservations must pass through the normal claim and
+    // reconciliation path. Returning here would strand a timed-out credit
+    // note forever and bypass the read-only FECompConsultar recovery.
+  }
+  // This read-side validation deliberately runs before any series claim or
+  // gateway operation: an invalid credit note must never contact ARCA.
+  const creditAssociation = await validateCreditNote(deps.db, input, validated);
   const key = seriesKey(environment, validated.emisorCuit, validated.ptoVta, validated.cbteTipo);
   const owner = randomUUID();
 
@@ -278,6 +349,7 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
       condicionIvaReceptor: validated.condicionIvaReceptor, fecha: validated.fecha, importeNetoCentavos: validated.importeNetoCentavos,
       importeIvaCentavos: validated.importeIvaCentavos, importeExentoCentavos: validated.importeExentoCentavos, importeTributosCentavos: validated.importeTributosCentavos,
       importeTotalCentavos: validated.importeTotalCentavos, items: validated.items, estado: "pendiente", idempotencyKey: input.idempotencyKey,
+      comprobanteAsociadoId: input.comprobanteAsociadoId ?? null,
     }).returning());
     if (!reserved) throw new ComprobanteEmissionError("No se pudo persistir la reserva del comprobante.");
     reservationPersisted = true;
@@ -295,7 +367,7 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
       }
       if (!Number.isInteger(latest) || latest < 0 || latest > 99_999_999) throw new ComprobanteEmissionError(EMISSION_UNCERTAIN_REASON);
       if (latest >= reserved.cbteNro!) {
-        const observed = deps.gateway.consultInvoice ? await deps.gateway.consultInvoice(comprobanteToFecaReq(reserved)) : null;
+        const observed = deps.gateway.consultInvoice ? await deps.gateway.consultInvoice(comprobanteToFecaReq(reserved, creditAssociation)) : null;
         if (observed && isMatchingResult(reserved, observed) && observed.cae && observed.caeFchVto) {
           const approved = await persistById(deps.db, key, reserved.id, { estado: "aprobado", cae: observed.cae, caeVto: observed.caeFchVto, resultado: "A", errores: null });
           authorized = true;
@@ -303,7 +375,7 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
         }
         throw new ComprobanteEmissionError(EMISSION_UNCERTAIN_REASON);
       }
-      const result = await deps.gateway.issueInvoice(comprobanteToFecaReq(reserved), async () => {
+      const result = await deps.gateway.issueInvoice(comprobanteToFecaReq(reserved, creditAssociation), async () => {
         if (!await ownsSeriesClaim(deps.db, key, owner)) {
           throw new ComprobanteEmissionError("La reserva perdió el lock de la serie; requiere verificación manual.");
         }

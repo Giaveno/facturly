@@ -127,6 +127,7 @@ export interface ComprobantePdfInput {
   items: ComprobanteItem[];
   cae: string;
   caeVto: string;
+  associated?: { cbteTipo: number; ptoVta: number; cbteNro: number };
 }
 
 /** Builds the printable model for an APPROVED comprobante snapshot. */
@@ -150,13 +151,16 @@ export function buildComprobantePdfModel(input: ComprobantePdfInput): PdfContent
   const base = buildInvoicePdfModel(invoiceInput);
   return {
     ...base,
-    lines: base.lines.map((line, index) => index === 1
+    lines: [
+      ...base.lines.map((line, index) => index === 1
       ? { ...line, value: String(input.ptoVta).padStart(5, "0") }
       : index === 2
         ? { ...line, value: `${String(input.ptoVta).padStart(5, "0")}-${String(input.cbteNro).padStart(8, "0")}` }
         : index === 4
           ? { ...line, value: input.docTipo === 99 ? "Consumidor Final" : `Documento ${input.docNro}` }
           : line),
+      ...(input.associated ? [{ label: "Comprobante asociado", value: `${input.associated.cbteTipo} ${String(input.associated.ptoVta).padStart(5, "0")}-${String(input.associated.cbteNro).padStart(8, "0")}` }] : []),
+    ],
     issuer: { name: input.issuerName, cuit: input.issuerCuit },
     itemLines: input.items.map((item) => ({ description: item.descripcion, amount: formatCentavos(item.totalCentavos) })),
     totals: [
