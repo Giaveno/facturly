@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { HOMOLOGACION_UI_MS } from "@/adapters/arca/timeouts";
 import type { ConsultationReport } from "@/lib/invoices/reconciliation";
 import { formatCentavos } from "@/domain/money";
@@ -13,6 +13,7 @@ export interface ReservedAttemptRow {
     cbteNro: number;
     importeTotalCentavos: number;
     canConsult: boolean;
+    closedNoRecordAt?: string;
 }
 export const SERIES_BLOCKED_UI_MESSAGE = "serie bloqueada, pendiente de conciliación";
 interface Result {
@@ -89,9 +90,14 @@ function Attempt({ row, enabled }: {
     <h3>Reserva {row.cbteTipo} / PV {row.ptoVta} / Nº {row.cbteNro}</h3>
     <p>CUIT emisor: {row.cuit} · Importe: {formatCentavos(row.importeTotalCentavos)}</p>
     <p>Referencia: {row.invoiceId}</p>
-    <p>{["incierto", "EMIT_ERROR", "EMITTING"].includes(row.status) ? SERIES_BLOCKED_UI_MESSAGE : `Estado local: ${row.status}. Resultado fiscal sin verificar; no implica rechazo confirmado.`}</p>
+    {row.closedNoRecordAt ? <>
+      <p>Intento anterior cerrado: la consulta histórica del {new Date(row.closedNoRecordAt).toLocaleString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })} devolvió código 602 (sin registros en ese momento).</p>
+      <p>Verificada: no existía en ARCA en esa consulta. No describe el estado actual de la numeración: ese número puede haber sido utilizado posteriormente por otro comprobante.</p>
+    </> : <p>{["incierto", "EMIT_ERROR", "EMITTING"].includes(row.status) ? SERIES_BLOCKED_UI_MESSAGE : `Estado local: ${row.status}. Resultado fiscal sin verificar; no implica rechazo confirmado.`}</p>}
+    {!row.closedNoRecordAt && <>
     <button type="button" onClick={consult} disabled={busy || cooldown || !enabled || !row.canConsult}>{busy ? "Consultando…" : "Consultar estado en ARCA (homologación)"}</button>
     {(!enabled || !row.canConsult) && <p>Consulta bloqueada: se requiere homologación actual y una aprobación original verificable en homologación.</p>}
+    </>}
     <div role="status" aria-live="polite">
       {result?.error && <p>{result.error}</p>}
       {report && <>

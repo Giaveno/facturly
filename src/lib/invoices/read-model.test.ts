@@ -172,6 +172,28 @@ describe("invoices read-model", () => {
     ).resolves.toBeNull();
   });
 
+  it("keeps a closed no-record attempt as historical evidence, not an issued invoice", async () => {
+    const invoiceId = await seedIssued({ cae: null });
+    await db.update(invoices).set({ status: "EMIT_FAILED" }).where(eq(invoices.id, invoiceId));
+    const [reservation] = await db.select().from(issuedInvoices).where(eq(issuedInvoices.invoiceId, invoiceId));
+    const checkedAt = "2026-10-29T23:14:55.770Z";
+    await db.insert(auditLog).values({ actor: "operator", action: "reservation_closed_no_record", invoiceId,
+      payload: { reservationId: reservation!.id, cuit: reservation!.cuit, ptoVta: reservation!.ptoVta, cbteTipo: reservation!.cbteTipo, cbteNro: reservation!.cbteNro, code: "602", checkedAt } });
+    expect(await listReservedAttempts(db)).toEqual([expect.objectContaining({ invoiceId, closedNoRecordAt: checkedAt, canConsult: false })]);
+    expect(await listIssuedInvoices(db)).toEqual([]);
+    expect(await loadIssuedInvoicePdfInput(db, invoiceId)).toBeNull();
+  });
+
+  it.each(["wrong-reservation", "invalid-date"])("ignores invalid historical closure: %s", async (invalid) => {
+    const invoiceId = await seedIssued({ cae: null });
+    const [reservation] = await db.select().from(issuedInvoices).where(eq(issuedInvoices.invoiceId, invoiceId));
+    await db.insert(auditLog).values({ actor: "operator", action: "reservation_closed_no_record", invoiceId,
+      payload: { reservationId: invalid === "wrong-reservation" ? "wrong" : reservation!.id, cuit: reservation!.cuit, ptoVta: reservation!.ptoVta,
+        cbteTipo: reservation!.cbteTipo, cbteNro: reservation!.cbteNro, code: "602", checkedAt: invalid === "invalid-date" ? "invalid" : "2026-10-29T23:14:55.770Z" } });
+    const [attempt] = await listReservedAttempts(db);
+    expect(attempt).not.toHaveProperty("closedNoRecordAt");
+  });
+
   it("lists real NULL-CAE attempts in every local state without treating legacy environment as safe", async () => {
     const invoiceId = await seedIssued({ cae: null });
     for (const status of ["EMIT_FAILED", "EMIT_ERROR", "EMITTING", "APPROVED"] as const) {

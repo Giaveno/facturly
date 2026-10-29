@@ -11,7 +11,7 @@ import { inspectCertificate, assertKeyMatchesCertificate } from "@/lib/credentia
 import { decryptPrivateKey, deriveAesKey } from "@/lib/db/credentials";
 import { DrizzleCredentialsRepository, type CredentialsRepository } from "@/lib/db/credentials-repository";
 import { DrizzleTaCacheStore } from "@/lib/db/ta-cache-store";
-import { invoices, issuedInvoices } from "@/lib/db/schema";
+import { auditLog, invoices, issuedInvoices } from "@/lib/db/schema";
 import type { Db } from "@/lib/db/types";
 import { isValidCuit } from "@/domain/cuit";
 import { parseApprovalSnapshot } from "@/domain/approval-snapshot";
@@ -267,8 +267,16 @@ export async function loadReservedInvoice(db: Db, id: string): Promise<ReservedI
     return r ?? null;
 }
 export async function listReservedAttempts(db: Db) {
-    const rows = await db.select({ invoiceId: invoices.id, status: invoices.status, cuit: issuedInvoices.cuit, ptoVta: issuedInvoices.ptoVta, cbteTipo: issuedInvoices.cbteTipo, cbteNro: issuedInvoices.cbteNro, importeTotalCentavos: issuedInvoices.importeTotalCentavos, approvalSnapshot: invoices.approvalSnapshot }).from(issuedInvoices).innerJoin(invoices, eq(issuedInvoices.invoiceId, invoices.id)).where(isNull(issuedInvoices.cae)).orderBy(issuedInvoices.createdAt);
-    return rows.map(({ approvalSnapshot, ...r }) => ({ ...r, canConsult: trusted({ ...r, approvalSnapshot }) }));
+    const rows = await db.select({ reservationId: issuedInvoices.id, invoiceId: invoices.id, status: invoices.status, cuit: issuedInvoices.cuit, ptoVta: issuedInvoices.ptoVta, cbteTipo: issuedInvoices.cbteTipo, cbteNro: issuedInvoices.cbteNro, importeTotalCentavos: issuedInvoices.importeTotalCentavos, approvalSnapshot: invoices.approvalSnapshot }).from(issuedInvoices).innerJoin(invoices, eq(issuedInvoices.invoiceId, invoices.id)).where(isNull(issuedInvoices.cae)).orderBy(issuedInvoices.createdAt);
+    const closures = await db.select().from(auditLog).where(eq(auditLog.action, "reservation_closed_no_record"));
+    return rows.map(({ approvalSnapshot, reservationId, ...r }) => {
+        const closure = closures.find(entry => {
+            const p = entry.payload as Record<string, unknown> | null;
+            return entry.invoiceId === r.invoiceId && p?.reservationId === reservationId && p?.cuit === r.cuit && p?.ptoVta === r.ptoVta && p?.cbteTipo === r.cbteTipo && p?.cbteNro === r.cbteNro && p?.code === "602" && typeof p?.checkedAt === "string" && Number.isFinite(Date.parse(p.checkedAt));
+        });
+        const closedNoRecordAt = closure ? (closure.payload as { checkedAt: string }).checkedAt : undefined;
+        return { ...r, canConsult: !closedNoRecordAt && trusted({ ...r, approvalSnapshot }), ...(closedNoRecordAt ? { closedNoRecordAt } : {}) };
+    });
 }
 const sharedAttempts = new Map<string, Attempt>();
 export function consultReservedInvoice(db: Db, env: Record<string, string | undefined>, id: string) { return createInvoiceConsultation({ env, repository: new DrizzleCredentialsRepository(db), store: new DrizzleTaCacheStore(db), getReservation: id => loadReservedInvoice(db, id), attempts: sharedAttempts })(id); }
