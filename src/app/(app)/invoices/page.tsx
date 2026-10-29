@@ -1,8 +1,9 @@
+import React from "react";
 import Link from "next/link";
 import { listReservedAttempts } from "@/lib/invoices/reconciliation";
 import { ReservedAttempts } from "./reserved-attempts";
 import { getDb } from "@/lib/db/client";
-import { listIssuedInvoices } from "@/lib/invoices/read-model";
+import { countApprovedComprobantes, listIssuedInvoices } from "@/lib/invoices/read-model";
 import { formatCentavos } from "@/domain/money";
 import ComprobantesList from "./comprobantes-list";
 
@@ -17,14 +18,15 @@ export const dynamic = "force-dynamic";
 export default async function InvoicesPage() {
   const db = getDb();
   const rows = await listIssuedInvoices(db);
+  const approvedCount = await countApprovedComprobantes(db);
   const attempts = await listReservedAttempts(db);
 
   return (
     <main className="page-content">
-      <div className="page-heading"><div><p className="eyebrow">Comprobantes emitidos</p><h1>Facturas</h1><p className="lede">Consultá las facturas emitidas y descargá el PDF cuando esté disponible.</p></div><span className="count-badge">{rows.length} facturas</span></div>
-      {rows.length === 0 ? (
+      <div className="page-heading"><div><p className="eyebrow">Comprobantes emitidos</p><h1>Facturas</h1><p className="lede">Consultá las facturas emitidas y descargá el PDF cuando esté disponible.</p></div><span className="count-badge">{approvedCount} comprobantes aprobados</span></div>
+      {approvedCount === 0 && rows.length === 0 ? (
         <div className="empty-state"><strong>Todavía no hay facturas emitidas.</strong><p>Las facturas aparecerán acá una vez que se hayan emitido.</p><Link href="/review">Ir a revisión</Link></div>
-      ) : (
+      ) : rows.length > 0 ? (
         <div className="table-wrap"><table>
           <thead>
             <tr>
@@ -59,7 +61,7 @@ export default async function InvoicesPage() {
             ))}
           </tbody>
         </table></div>
-      )}
+      ) : null}
       <ReservedAttempts rows={attempts} enabled={process.env.ARCA_ENV === "homologacion"} />
       <ComprobantesList />
     </main>

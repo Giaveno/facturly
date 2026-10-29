@@ -108,7 +108,7 @@ export function ReservedAttempts({ rows, enabled }: {
     enabled: boolean;
 }) {
     return <section aria-labelledby="reserved-attempts-title">
-    <h2 id="reserved-attempts-title">Intentos con número reservado — sin CAE local</h2>
+    <h2 id="reserved-attempts-title">Intentos anteriores con número reservado — sin CAE local</h2>
     <p>Solo homologación: comprobantes de prueba sin validez fiscal. Consultar no emite, reintenta ni cambia estados; tampoco habilita un PDF. Comparta el resultado antes de decidir cualquier recuperación.</p>
     {!rows.length && <p>No hay intentos con número reservado pendientes de verificación.</p>}
     {rows.map(row => <Attempt key={`${JSON.stringify(row)}:${enabled}`} row={row} enabled={enabled}/>)}

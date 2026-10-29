@@ -9,7 +9,7 @@
  * invoice has a real CAE (and is otherwise fully materialized).
  */
 
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, count, eq, isNotNull } from "drizzle-orm";
 import { clients, comprobantes, invoices, issuedInvoices } from "@/lib/db/schema";
 import type { ComprobantePdfInput, InvoicePdfInput } from "@/pdf/render";
 import type { ComprobanteItem } from "@/domain/comprobantes";
@@ -25,6 +25,12 @@ export interface IssuedInvoiceRow {
   cbteNro: number | null;
   cae: string | null;
   importeTotalCentavos: number | null;
+}
+
+/** Modern issuance list count: pending, rejected and uncertain are not issued. */
+export async function countApprovedComprobantes(db: Db): Promise<number> {
+  const [row] = await db.select({ count: count() }).from(comprobantes).where(eq(comprobantes.estado, "aprobado"));
+  return Number(row?.count ?? 0);
 }
 
 /**

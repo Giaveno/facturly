@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { createTestDb } from "@/test-support/test-db";
 import { clients, comprobantes } from "@/lib/db/schema";
-import { loadApprovedComprobantePdfInput } from "@/lib/invoices/read-model";
+import { countApprovedComprobantes, loadApprovedComprobantePdfInput } from "@/lib/invoices/read-model";
 import { buildComprobantePdfModel, renderInvoicePdf } from "./render";
 
 it("renders the exact approved row shape persisted by the emission service", async () => {
@@ -18,6 +18,7 @@ it("renders the exact approved row shape persisted by the emission service", asy
       estado: "aprobado", cae: "86441033082760", caeVto: "2026-11-08", resultado: "A", idempotencyKey: "pdf-regression",
     }).returning();
     if (!row) throw new Error("Missing test comprobante");
+    expect(await countApprovedComprobantes(db)).toBe(1);
     const input = await loadApprovedComprobantePdfInput(db, row.id, company.id);
     expect(input).not.toBeNull();
     const model = buildComprobantePdfModel(input!);
