@@ -78,6 +78,13 @@
       "when": 1793304000000,
       "tag": "0010_incierto_reservation",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793306873743,
+      "tag": "0011_condemned_hannibal_king",
+      "breakpoints": true
     }
   ]
 }

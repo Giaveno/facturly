@@ -391,6 +391,8 @@ export const emissionSeriesClaims = pgTable("emission_series_claims", {
   owner: text("owner"),
   leaseExpiresAtMs: bigint("lease_expires_at_ms", { mode: "number" }).notNull(),
   uncertain: boolean("uncertain").notNull().default(false),
+  /** Timestamp at which an uncertain outcome became eligible for reconciliation. */
+  uncertainSinceMs: bigint("uncertain_since_ms", { mode: "number" }),
 });
 /** Permanent one-shot marker; no automatic retry or marker deletion is supported. */
 export const diagnosticIssuance = pgTable("diagnostic_issuance", {

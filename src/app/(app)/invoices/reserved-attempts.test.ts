@@ -7,6 +7,7 @@ describe("reserved attempt UI fiscal isolation", () => {
         expect(source).toContain("/consult");
         expect(source).toContain("AbortController");
         expect(source).toContain("inFlight.current");
+        expect(source).toContain("serie bloqueada, pendiente de conciliación");
         expect(source).toContain("identity");
         expect(source).toMatch(/15_?000/);
         expect(source).not.toMatch(/\/approve|\/pdf|recoverStuckEmissions|router.refresh|FECAESolicitar/);

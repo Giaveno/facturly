@@ -14,6 +14,7 @@ export interface ReservedAttemptRow {
     importeTotalCentavos: number;
     canConsult: boolean;
 }
+export const SERIES_BLOCKED_UI_MESSAGE = "serie bloqueada, pendiente de conciliación";
 interface Result {
     report?: ConsultationReport;
     error?: string;
@@ -88,7 +89,7 @@ function Attempt({ row, enabled }: {
     <h3>Reserva {row.cbteTipo} / PV {row.ptoVta} / Nº {row.cbteNro}</h3>
     <p>CUIT emisor: {row.cuit} · Importe: {formatCentavos(row.importeTotalCentavos)}</p>
     <p>Referencia: {row.invoiceId}</p>
-    <p>Estado local: {row.status}. Resultado fiscal sin verificar; no implica rechazo confirmado.</p>
+    <p>{["incierto", "EMIT_ERROR", "EMITTING"].includes(row.status) ? SERIES_BLOCKED_UI_MESSAGE : `Estado local: ${row.status}. Resultado fiscal sin verificar; no implica rechazo confirmado.`}</p>
     <button type="button" onClick={consult} disabled={busy || cooldown || !enabled || !row.canConsult}>{busy ? "Consultando…" : "Consultar estado en ARCA (homologación)"}</button>
     {(!enabled || !row.canConsult) && <p>Consulta bloqueada: se requiere homologación actual y una aprobación original verificable en homologación.</p>}
     <div role="status" aria-live="polite">

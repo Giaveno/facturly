@@ -10,6 +10,7 @@ import {
   IDEMPOTENCY_CONFLICT_REASON,
   RECONCILIATION_NOT_FOUND_REASON,
   RECONCILIATION_UNCERTAIN_REASON,
+  uncertainGraceMs,
 } from "./comprobante-emission-service";
 
 describe("comprobante emission service", () => {
@@ -21,6 +22,12 @@ describe("comprobante emission service", () => {
   beforeEach(async () => {
     await handle.db.delete(comprobantes);
     await handle.db.delete(clients);
+  });
+
+  it("uses three WSFE call budgets by default and accepts a safe grace override", () => {
+    expect(uncertainGraceMs("homologacion", {})).toBe(75_000);
+    expect(uncertainGraceMs("production", {})).toBe(60_000);
+    expect(uncertainGraceMs("homologacion", { ARCA_UNCERTAIN_GRACE_MS: "1234" })).toBe(1234);
   });
 
   async function company(cuit = "20123456786") {

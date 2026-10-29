@@ -6,7 +6,8 @@ import { comprobantes, clients, emissionSeriesClaims } from "@/lib/db/schema";
 import type { Db } from "@/lib/db/types";
 import type { ArcaGateway, FECAEReq, IssueInvoiceResult } from "@/ports/arca-gateway";
 import { resolveArcaEnvironment } from "./environment";
-import { acquireSeriesClaim, finishSeriesClaim, ownsSeriesClaim, SERIES_LEASE_MS, seriesKey } from "./series-claim";
+import { acquireSeriesClaim, finishSeriesClaim, ownsSeriesClaim, reconcileSeriesClaim, SERIES_LEASE_MS, seriesKey } from "./series-claim";
+import { arcaTimeouts } from "@/adapters/arca/timeouts";
 type SeriesClaim = typeof emissionSeriesClaims.$inferSelect;
 
 export const RECONCILIATION_NOT_FOUND_REASON = "ARCA no encontró el comprobante reservado; no se reemitirá automáticamente.";
@@ -14,6 +15,7 @@ export const RECONCILIATION_MISMATCH_REASON = "ARCA devolvió un comprobante res
 export const RECONCILIATION_UNCERTAIN_REASON = "No se pudo confirmar el comprobante reservado en ARCA; requiere verificación manual.";
 export const EMISSION_UNCERTAIN_REASON = "El resultado de ARCA es incierto después de reservar el número; requiere verificación manual.";
 export const IDEMPOTENCY_CONFLICT_REASON = "La clave de idempotencia ya pertenece a otro emisor o serie fiscal.";
+export const SERIES_BLOCKED_MESSAGE = "serie bloqueada, pendiente de conciliación";
 
 export class ComprobanteEmissionError extends Error {
   constructor(message: string) { super(message); this.name = "ComprobanteEmissionError"; }
@@ -30,6 +32,9 @@ export interface ComprobanteEmissionDeps {
   now?: () => Date;
   /** Test/observability seam after the durable reservation, before FECAESolicitar. */
   beforeArca?: () => Promise<void>;
+  /** Override for tests/operations; production defaults to 3× the WSFE call budget. */
+  uncertainGraceMs?: number;
+  env?: Record<string, string | undefined>;
 }
 export interface ComprobanteEmissionResult {
   id: string;
@@ -69,8 +74,8 @@ async function claimFor(db: Db, key: string): Promise<SeriesClaim | undefined> {
     return claim;
   });
 }
-async function releaseClaim(db: Db, key: string, owner: string, authorized: boolean): Promise<void> {
-  await withSeriesLock(db, key, async (tx) => finishSeriesClaim(tx, key, owner, authorized));
+async function releaseClaim(db: Db, key: string, owner: string, authorized: boolean, timestamp = Date.now()): Promise<void> {
+  await withSeriesLock(db, key, async (tx) => finishSeriesClaim(tx, key, owner, authorized, timestamp));
 }
 async function clearUncertainClaim(db: Db, key: string): Promise<void> {
   await withSeriesLock(db, key, async (tx) => {
@@ -89,13 +94,19 @@ async function waitForNoOwner(db: Db, key: string): Promise<void> {
 async function claimSeries(db: Db, key: string, owner: string): Promise<void> {
   for (let attempt = 0; attempt < CLAIM_WAIT_ATTEMPTS; attempt += 1) {
     const claim = await claimFor(db, key);
-    if (claim?.uncertain && !claim.owner) throw new ComprobanteEmissionError(RECONCILIATION_UNCERTAIN_REASON);
+    if (claim?.uncertain && !claim.owner) throw new ComprobanteEmissionError(SERIES_BLOCKED_MESSAGE);
     if (!claim?.owner || claim.owner === owner) {
       if (await withSeriesLock(db, key, async (tx) => acquireSeriesClaim(tx, key, owner))) return;
     }
     await sleep(CLAIM_WAIT_MS);
   }
   throw new ComprobanteEmissionError(RECONCILIATION_UNCERTAIN_REASON);
+}
+export function uncertainGraceMs(environment: ComprobanteAmbiente | "production", env: Record<string, string | undefined> = process.env): number {
+  const configured = Number(env.ARCA_UNCERTAIN_GRACE_MS);
+  if (Number.isSafeInteger(configured) && configured >= 0) return configured;
+  const arcaEnvironment = environment === "produccion" ? "production" : environment;
+  return 3 * arcaTimeouts(arcaEnvironment).callMs;
 }
 function taxRate(items: ComprobanteItem[]): number | null { return items.find((item) => item.alicuota !== 0)?.alicuota ?? 0; }
 
@@ -159,6 +170,36 @@ async function reconcileOrphans(db: Db, deps: ComprobanteEmissionDeps, key: stri
     }
   }
 }
+
+export interface SeriesRecoveryInput {
+  key: string;
+  environment: ComprobanteAmbiente;
+  emisorCuit: string;
+  ptoVta: number;
+  cbteTipo: number;
+}
+
+/**
+ * Explicit, read-only-first recovery for a crashed owner. FECompConsultar is
+ * used for every pending/incierto reservation; the durable claim is released
+ * only after all rows have a terminal outcome and only for the observed claim
+ * generation. This function never calls FECAESolicitar.
+ */
+export async function recoverSeriesClaim(deps: ComprobanteEmissionDeps, input: SeriesRecoveryInput): Promise<void> {
+  const observed = await claimFor(deps.db, input.key);
+  if (!observed) return;
+  const nowMs = (deps.now ?? (() => new Date()))().getTime();
+  if (observed.owner && observed.leaseExpiresAtMs > nowMs) throw new ComprobanteEmissionError(SERIES_BLOCKED_MESSAGE);
+  if (observed.uncertain && !observed.owner) {
+    const grace = deps.uncertainGraceMs ?? uncertainGraceMs(input.environment, deps.env ?? process.env);
+    const uncertainAt = observed.uncertainSinceMs ?? observed.leaseExpiresAtMs;
+    if (nowMs - uncertainAt < grace) throw new ComprobanteEmissionError(SERIES_BLOCKED_MESSAGE);
+  }
+  await reconcileOrphans(deps.db, deps, input.key, input.environment, input.emisorCuit, input.ptoVta, input.cbteTipo);
+  const current = await claimFor(deps.db, input.key);
+  if (!current) return;
+  await withSeriesLock(deps.db, input.key, async (tx) => reconcileSeriesClaim(tx, current));
+}
 function resultFromRow(row: typeof comprobantes.$inferSelect, emitted: boolean): ComprobanteEmissionResult {
   return { id: row.id, empresaId: row.empresaId, estado: row.estado as ComprobanteEmissionResult["estado"], cbteNro: row.cbteNro, cae: row.cae, caeVto: row.caeVto, resultado: row.resultado, errores: row.errores, emitted };
 }
@@ -182,6 +223,13 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
 
   const staleClaim = await claimFor(deps.db, key);
   if (staleClaim?.owner) await waitForNoOwner(deps.db, key);
+  // A caller-supplied clock is a deterministic test/maintenance seam; callers
+  // that need production grace with a custom clock must pass it explicitly.
+  const grace = deps.uncertainGraceMs ?? (deps.now ? 0 : uncertainGraceMs(environment, deps.env ?? process.env));
+  if (staleClaim?.uncertain && !staleClaim.owner) {
+    const uncertainAt = staleClaim.uncertainSinceMs ?? staleClaim.leaseExpiresAtMs;
+    if ((now().getTime() - uncertainAt) < grace) throw new ComprobanteEmissionError(SERIES_BLOCKED_MESSAGE);
+  }
   await reconcileOrphans(deps.db, deps, key, environment, validated.emisorCuit, validated.ptoVta, validated.cbteTipo);
   const postReconciliationOrphans = await readOrphans(deps.db, key, environment, validated.emisorCuit, validated.ptoVta, validated.cbteTipo);
   if (postReconciliationOrphans.length > 0) throw new ComprobanteEmissionError(RECONCILIATION_UNCERTAIN_REASON);
@@ -216,6 +264,26 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
     reservationPersisted = true;
     try {
       await deps.beforeArca?.();
+      // Re-read ARCA immediately before dispatch. If the candidate has already
+      // advanced remotely, never send it: consult the pinned number or leave it
+      // uncertain for explicit recovery. This prevents reissuing a number ARCA
+      // may have approved outside this process.
+      let latest: number;
+      try {
+        latest = await deps.gateway.ultimoAutorizado(validated.emisorCuit, validated.ptoVta, validated.cbteTipo as 1 | 6 | 11);
+      } catch {
+        throw new ComprobanteEmissionError(EMISSION_UNCERTAIN_REASON);
+      }
+      if (!Number.isInteger(latest) || latest < 0 || latest > 99_999_999) throw new ComprobanteEmissionError(EMISSION_UNCERTAIN_REASON);
+      if (latest >= reserved.cbteNro!) {
+        const observed = deps.gateway.consultInvoice ? await deps.gateway.consultInvoice(comprobanteToFecaReq(reserved)) : null;
+        if (observed && isMatchingResult(reserved, observed) && observed.cae && observed.caeFchVto) {
+          const approved = await persistById(deps.db, key, reserved.id, { estado: "aprobado", cae: observed.cae, caeVto: observed.caeFchVto, resultado: "A", errores: null });
+          authorized = true;
+          return resultFromRow(approved, false);
+        }
+        throw new ComprobanteEmissionError(EMISSION_UNCERTAIN_REASON);
+      }
       const result = await deps.gateway.issueInvoice(comprobanteToFecaReq(reserved), async () => {
         if (!await ownsSeriesClaim(deps.db, key, owner)) {
           throw new ComprobanteEmissionError("La reserva perdió el lock de la serie; requiere verificación manual.");
@@ -237,7 +305,7 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
       return resultFromRow(uncertain, false);
     }
   } finally {
-    await releaseClaim(deps.db, key, owner, authorized || !reservationPersisted || !uncertainOutcome);
+    await releaseClaim(deps.db, key, owner, authorized || !reservationPersisted || !uncertainOutcome, now().getTime());
   }
 }
 export const emitFiscalComprobante = emitComprobante;

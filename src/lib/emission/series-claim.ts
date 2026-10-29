@@ -10,17 +10,17 @@ export function seriesKey(environment: "production" | "produccion" | "homologaci
 }
 /** Atomic compare-and-set, shared by every worker. Never steal even an expired claim. */
 export async function acquireSeriesClaim(db: Db, key: string, owner: string, now = Date.now()): Promise<boolean> {
-  const rows = await db.insert(emissionSeriesClaims).values({seriesKey:key,owner,leaseExpiresAtMs:now+SERIES_LEASE_MS,uncertain:false})
-    .onConflictDoUpdate({target:emissionSeriesClaims.seriesKey,set:{owner,leaseExpiresAtMs:now+SERIES_LEASE_MS},where:and(isNull(emissionSeriesClaims.owner),eq(emissionSeriesClaims.uncertain,false))}).returning();
+  const rows = await db.insert(emissionSeriesClaims).values({seriesKey:key,owner,leaseExpiresAtMs:now+SERIES_LEASE_MS,uncertain:false,uncertainSinceMs:null})
+    .onConflictDoUpdate({target:emissionSeriesClaims.seriesKey,set:{owner,leaseExpiresAtMs:now+SERIES_LEASE_MS,uncertainSinceMs:null},where:and(isNull(emissionSeriesClaims.owner),eq(emissionSeriesClaims.uncertain,false))}).returning();
   return rows[0]?.owner === owner;
 }
-export async function finishSeriesClaim(db: Db, key: string, owner: string, authorized: boolean): Promise<void> {
-  await db.update(emissionSeriesClaims).set({owner:null,uncertain:!authorized,leaseExpiresAtMs:Date.now()})
+export async function finishSeriesClaim(db: Db, key: string, owner: string, authorized: boolean, now = Date.now()): Promise<void> {
+  await db.update(emissionSeriesClaims).set({owner:null,uncertain:!authorized,uncertainSinceMs:authorized ? null : now,leaseExpiresAtMs:now})
     .where(and(eq(emissionSeriesClaims.seriesKey,key),eq(emissionSeriesClaims.owner,owner)));
 }
 /** Recovery releases only the exact observed generation, never a subsequent dispatch. */
 export async function reconcileSeriesClaim(db: Db, observed: typeof emissionSeriesClaims.$inferSelect): Promise<void> {
-  await db.update(emissionSeriesClaims).set({owner:null,uncertain:false}).where(and(
+  await db.update(emissionSeriesClaims).set({owner:null,uncertain:false,uncertainSinceMs:null}).where(and(
     eq(emissionSeriesClaims.seriesKey,observed.seriesKey),
     observed.owner === null ? isNull(emissionSeriesClaims.owner) : eq(emissionSeriesClaims.owner,observed.owner),
     eq(emissionSeriesClaims.leaseExpiresAtMs,observed.leaseExpiresAtMs),

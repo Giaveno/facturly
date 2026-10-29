@@ -13,6 +13,7 @@
     "test:e2e": "playwright test",
     "demo": "tsx scripts/demo.ts",
     "homologacion:spike": "tsx scripts/homologacion-spike.ts",
+    "emission:recover-series": "tsx scripts/recover-emission-series.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
