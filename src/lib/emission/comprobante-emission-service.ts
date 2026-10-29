@@ -33,7 +33,7 @@ export interface ComprobanteEmissionDeps {
   now?: () => Date;
   /** Test/observability seam after the durable reservation, before FECAESolicitar. */
   beforeArca?: () => Promise<void>;
-  /** Override for tests/operations; production defaults to 3× the WSFE call budget. */
+  /** Override for tests/operations; production defaults to at least ten minutes. */
   uncertainGraceMs?: number;
   env?: Record<string, string | undefined>;
 }
@@ -109,7 +109,8 @@ export function uncertainGraceMs(environment: ComprobanteAmbiente | "production"
   const configured = Number(env.ARCA_UNCERTAIN_GRACE_MS);
   if (Number.isSafeInteger(configured) && configured >= 0) return configured;
   const arcaEnvironment = environment === "produccion" ? "production" : environment;
-  return 3 * arcaTimeouts(arcaEnvironment).callMs;
+  const callBudgetGrace = 3 * arcaTimeouts(arcaEnvironment).callMs;
+  return arcaEnvironment === "production" ? Math.max(10 * 60_000, callBudgetGrace) : callBudgetGrace;
 }
 function taxRate(items: ComprobanteItem[]): number | null { return items.find((item) => item.alicuota !== 0)?.alicuota ?? 0; }
 

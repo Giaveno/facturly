@@ -30,7 +30,7 @@ describe("comprobante emission service", () => {
 
   it("uses three WSFE call budgets by default and accepts a safe grace override", () => {
     expect(uncertainGraceMs("homologacion", {})).toBe(75_000);
-    expect(uncertainGraceMs("production", {})).toBe(60_000);
+    expect(uncertainGraceMs("production", {})).toBe(600_000);
     expect(uncertainGraceMs("homologacion", { ARCA_UNCERTAIN_GRACE_MS: "1234" })).toBe(1234);
   });
 
@@ -263,6 +263,24 @@ describe("comprobante emission service", () => {
     expect(result.estado).toBe("incierto");
     expect(arcaCalls).toBe(0);
     expect(result.cbteNro).toBe(1);
+  });
+
+  it("consults and approves the reservation when ARCA advanced before dispatch", async () => {
+    const empresa = await company();
+    let latestCalls = 0;
+    let consultCalls = 0;
+    const gateway = {
+      getIvaCondition: async () => "ri" as const,
+      ultimoAutorizado: async () => latestCalls++ === 0 ? 0 : 1,
+      consultInvoice: async () => {
+        consultCalls += 1;
+        return { cbteNro: 1, cae: "70000000000001", caeFchVto: "2026-11-08" };
+      },
+      issueInvoice: async () => { throw new Error("must not dispatch an already-authorized number"); },
+    };
+    const result = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, input(empresa, "advanced-before-dispatch"));
+    expect(result).toMatchObject({ estado: "aprobado", cbteNro: 1, cae: "70000000000001", emitted: false });
+    expect(consultCalls).toBe(1);
   });
 
   it("rejects an idempotency key whose persisted fiscal tuple differs", async () => {
