@@ -41,7 +41,8 @@ import {
   DUPLICATE_ERROR_CODES,
 } from "./errors";
 import { createConsoleLogger, noopLogger, noopMetrics, type ArcaLogger, type ArcaMetrics } from "./logger";
-import { readEmissionsEnabled } from "./emissions";
+import { assertEmissionConfiguration, readEmissionsEnabled } from "./emissions";
+import { resolveArcaEnvironment } from "@/lib/emission/environment";
 import { ArcaQueryError } from "./query-diagnostics";
 
 export interface ArcaGatewayProdOptions {
@@ -52,6 +53,8 @@ export interface ArcaGatewayProdOptions {
   metrics?: ArcaMetrics;
   /** Master emission kill switch (default false — the safe state). */
   emissionsEnabled?: boolean;
+  env?: Record<string, string | undefined>;
+  environment?: "production" | "homologacion";
 }
 
 export class ArcaGatewayProd implements ArcaGateway {
@@ -61,14 +64,29 @@ export class ArcaGatewayProd implements ArcaGateway {
   private readonly logger: ArcaLogger;
   private readonly metrics: ArcaMetrics;
   private readonly emissionsEnabled: boolean;
+  private readonly environment: "production" | "homologacion";
 
   constructor(options: ArcaGatewayProdOptions) {
+    const emissionsEnabled = options.emissionsEnabled ?? false;
+    if (emissionsEnabled) {
+      if (options.environment === "production") {
+        // Explicit production construction must fail closed before any
+        // gateway operation. Keep the dedicated configuration error/message.
+        assertEmissionConfiguration({
+          EMISSIONS_ENABLED: "true",
+          ARCA_ENV: options.environment,
+        });
+      } else if (options.env) {
+        assertEmissionConfiguration(options.env);
+      }
+    }
     this.taCache = options.taCache;
     this.wsfe = options.wsfe;
     this.padron = options.padron;
     this.logger = options.logger ?? noopLogger;
     this.metrics = options.metrics ?? noopMetrics;
-    this.emissionsEnabled = options.emissionsEnabled ?? false;
+    this.emissionsEnabled = emissionsEnabled;
+    this.environment = options.environment ?? "homologacion";
   }
 
   async getIvaCondition(
@@ -96,11 +114,8 @@ export class ArcaGatewayProd implements ArcaGateway {
   }
 
   async issueInvoice(req: FECAEReq, beforeDispatch?: () => Promise<void>): Promise<IssueInvoiceResult> {
-    if (!this.emissionsEnabled) {
-      throw new ArcaBusinessError(
-        "Emissions are disabled (EMISSIONS_ENABLED=false) — refusing to contact ARCA",
-      );
-    }
+    if (!this.emissionsEnabled) assertEmissionConfiguration({ EMISSIONS_ENABLED: "false", ARCA_ENV: this.environment });
+    if (this.environment !== "homologacion") assertEmissionConfiguration({ EMISSIONS_ENABLED: "true", ARCA_ENV: this.environment });
     // The caller owns a durable environment/series claim and reservation.
     // A unique row alone does not serialize dispatch of an existing reservation.
     // An issuance is never retried, even after an authentication error.
@@ -235,6 +250,7 @@ export interface ArcaGatewayProdConfig {
   logger?: ArcaLogger;
   metrics?: ArcaMetrics;
   emissionsEnabled?: boolean;
+  env?: Record<string, string | undefined>;
   clock?: () => Date;
 }
 
@@ -250,6 +266,8 @@ export function certFingerprint(certPem: string): string {
 export function createArcaGatewayProd(
   config: ArcaGatewayProdConfig,
 ): ArcaGateway {
+  const env = config.env ?? process.env;
+  assertEmissionConfiguration(env);
   const clock = config.clock ?? (() => new Date());
   const logger = config.logger ?? createConsoleLogger();
   const metrics = config.metrics ?? noopMetrics;
@@ -280,6 +298,10 @@ export function createArcaGatewayProd(
     padron,
     logger,
     metrics,
-    emissionsEnabled: config.emissionsEnabled ?? readEmissionsEnabled(),
+    // Derive environment only from validated configuration, never from an
+    // endpoint or the caller's `emissionsEnabled` override.
+    emissionsEnabled: config.emissionsEnabled ?? readEmissionsEnabled(env),
+    environment: resolveArcaEnvironment(env),
+    env,
   });
 }

@@ -15,6 +15,7 @@ import {
 import { parseApprovalSnapshot } from "@/domain/approval-snapshot";
 import { resolveArcaEnvironment } from "@/lib/emission/environment";
 import { inngest } from "@/lib/inngest/client";
+import { EmissionConfigurationError } from "@/adapters/arca/emissions";
 
 function errorJson(status: number, message: string, correlationId: string) {
   return NextResponse.json({ error: message, correlationId }, { status });
@@ -80,6 +81,9 @@ export async function POST(
     });
     return NextResponse.json({ id: approved.id, status: approved.status });
   } catch (err) {
+    if (err instanceof EmissionConfigurationError) {
+      return NextResponse.json({ error: err.publicMessage, correlationId, code: err.code, status: "deshabilitada" }, { status: err.status });
+    }
     if (err instanceof InvoiceStateError) {
       return errorJson(409, err.publicMessage ?? "Invoice is not in an approvable state", correlationId);
     }

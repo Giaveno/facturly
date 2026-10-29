@@ -27,7 +27,7 @@ import {
 } from "@/lib/db/credentials-repository";
 import { DrizzleTaCacheStore } from "@/lib/db/ta-cache-store";
 import { resolveArcaEnvironment } from "./environment";
-import { readEmissionsEnabled } from "@/adapters/arca/emissions";
+import { assertEmissionConfiguration } from "@/adapters/arca/emissions";
 import {
   createConsoleLogger,
   createInMemoryMetrics,
@@ -43,6 +43,7 @@ export function buildArcaGateway(
   db: Db,
   env: Record<string, string | undefined> = process.env,
 ): ArcaGateway {
+  assertEmissionConfiguration(env);
   const arcaEnv = resolveArcaEnvironment(env);
   const aesKey = env.AES_KEY ?? "";
   if (aesKey.trim() === "") {
@@ -68,7 +69,8 @@ export function buildArcaGateway(
       arcaEnv === "production" ? PADRON_PRODUCTION_URL : PADRON_HOMOLOGACION_URL,
     transport: createFetchTransport({ logger, metrics, timeoutMs: arcaTimeouts(arcaEnv).callMs }),
     taStore: new DrizzleTaCacheStore(db),
-    emissionsEnabled: readEmissionsEnabled(env),
+    emissionsEnabled: true,
+    env,
     logger,
     metrics,
   });

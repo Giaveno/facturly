@@ -29,6 +29,13 @@ describe("comprobantes route", () => {
     expect(vi.mocked(emitComprobante).mock.calls[0]?.[0].environment).toBeUndefined();
   });
   it("returns blocked series as an explicit non-retryable outcome", async () => { vi.mocked(emitComprobante).mockRejectedValue(new Error("serie bloqueada, pendiente de conciliación")); const response = await POST(request({ empresaId: companyId, idempotencyKey: "stable" })); const body = await response.json(); expect(response.status).toBe(409); expect(body.code).toBe("SERIES_BLOCKED"); expect(body.status).toBe("incierto"); });
+  it("maps disabled configuration separately from an ARCA rejection", async () => {
+    const error = Object.assign(new Error("La emisión está deshabilitada en este servidor (configuración)"), { code: "EMISSIONS_DISABLED" });
+    vi.mocked(emitComprobante).mockRejectedValue(error);
+    const response = await POST(request({ empresaId: companyId, idempotencyKey: "stable" }));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "EMISSIONS_DISABLED", status: "deshabilitada", error: "La emisión está deshabilitada en este servidor (configuración)" });
+  });
   it("rejects an invalid company id", async () => { const response = await POST(request({ empresaId: "not-a-uuid" }, { "Idempotency-Key": "stable" })); expect(response.status).toBe(400); expect((await response.json()).error).toContain("UUID"); });
   it("returns 404 for a missing company", async () => { vi.mocked(getDb).mockReturnValue(dbFor([]) as never); const response = await POST(request({ empresaId: "00000000-0000-4000-8000-000000000002" }, { "Idempotency-Key": "stable" })); expect(response.status).toBe(404); expect((await response.json()).error).toContain("empresa"); });
 });

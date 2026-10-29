@@ -37,6 +37,7 @@ import {
 import type { ArcaGateway, FECAEReq, IssueInvoiceResult } from "@/ports/arca-gateway";
 import type { CbteTipo } from "@/domain/policy";
 import type { Db } from "@/lib/db/types";
+import { EmissionDisabledError } from "@/adapters/arca/emissions";
 import { parseFecaesolicitarResponse } from "@/adapters/arca/wsfe";
 import { WsfeClient } from "@/adapters/arca/wsfe";
 import { ArcaGatewayProd } from "@/adapters/arca/arca-gateway.prod";
@@ -235,6 +236,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     const operations: string[] = [];
     const gateway = new ArcaGatewayProd({
       emissionsEnabled: true,
+      environment: "homologacion",
       taCache: { get: async () => ({ token: "TOKEN", sign: "SIGN", expirationTime: "2026-09-23T00:00:00Z" }), evict: async () => {} },
       padron: new PadronA5Client({ url: "offline", transport: { post: async () => { throw new Error("Unexpected padron query"); } } }),
       wsfe: new WsfeClient({ url: "offline", transport: { post: async (_url, body) => {
@@ -624,7 +626,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     const gateway = new ArcaGatewayFake(undefined, () => FIXED_DATE);
     await expect(
       emitBatch({ ...deps(gateway, false) }, [invoiceId]),
-    ).rejects.toThrow(/disabled/);
+    ).rejects.toBeInstanceOf(EmissionDisabledError);
     expect(await db.select().from(issuedInvoices)).toHaveLength(0);
   });
 

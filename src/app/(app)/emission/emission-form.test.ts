@@ -10,4 +10,9 @@ describe("interpretEmissionResponse", () => {
     expect(interpretEmissionResponse({ estado: "incierto", errores: "Resultado incierto" })).toMatchObject({ kind: "blocked", retryAllowed: false });
     expect(interpretEmissionResponse({ code: "SERIES_BLOCKED", message: "serie bloqueada" })).toMatchObject({ kind: "blocked", retryAllowed: false });
   });
+
+  it("distinguishes configuration-disabled emission from ARCA rejection", () => {
+    expect(interpretEmissionResponse({ code: "EMISSIONS_DISABLED", error: "internal" })).toEqual({ kind: "disabled", text: "La emisión está deshabilitada en este servidor (configuración)", retryAllowed: false });
+    expect(interpretEmissionResponse({ code: "10049", message: "ARCA rejected emission" })).toMatchObject({ kind: "rejected", retryAllowed: true, text: "10049: ARCA rejected emission" });
+  });
 });

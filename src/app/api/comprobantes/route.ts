@@ -49,13 +49,17 @@ export async function POST(req: Request): Promise<Response> {
     const [empresa] = await db.select({ cuit: clients.cuit, condicionIva: clients.condicionIva }).from(clients).where(eq(clients.id, empresaId));
     if (!empresa) return errorJson(404, "La empresa emisora no existe o no pertenece al usuario autenticado", correlationId);
     const { emisorCuit: _ignoredCuit, emisorCondicionIva: _ignoredCondition, ...clientBody } = body;
-    const result = await emitComprobante({ db, gateway: buildArcaGateway(db), environment: undefined }, { ...clientBody, idempotencyKey, empresaId, emisorCuit: empresa.cuit, emisorCondicionIva: empresa.condicionIva } as never);
+    const env = process.env;
+    const result = await emitComprobante({ db, gateway: buildArcaGateway(db, env), environment: undefined, env }, { ...clientBody, idempotencyKey, empresaId, emisorCuit: empresa.cuit, emisorCondicionIva: empresa.condicionIva } as never);
     return NextResponse.json(result, { status: result.estado === "aprobado" ? 200 : 202 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Emission failed";
+    const message = err instanceof Error ? err.message : "No se pudo completar la emisión.";
+    const configurationCode = err instanceof Error ? (err as Error & { code?: string }).code : undefined;
+    if (configurationCode === "EMISSIONS_DISABLED") return errorJson(503, message, correlationId, { code: configurationCode, status: "deshabilitada" });
+    if (configurationCode === "EMISSIONS_HOMOLOGATION_REQUIRED") return errorJson(503, message, correlationId, { code: configurationCode, status: "bloqueada" });
     const arca = err instanceof ArcaError ? { code: err.code, message: err.message, stage: err.stage, category: err.category, providerCodes: err.providerCodes } : undefined;
     const blocked = message === SERIES_BLOCKED_MESSAGE || message === RECONCILIATION_UNCERTAIN_REASON || /incierto|conciliaci/i.test(message);
-    const fiscal = arca ? `${arca.code ?? "ARCA"}: ${arca.message}` : message;
+    const fiscal = arca ? `Rechazo ARCA${arca.code ? ` (${arca.code})` : ""}: ${arca.message}` : message;
     return errorJson(blocked ? 409 : err instanceof ComprobanteEmissionError ? 422 : 500, fiscal, correlationId, { code: blocked ? "SERIES_BLOCKED" : arca?.code, status: blocked ? "incierto" : undefined, arca });
   }
 }

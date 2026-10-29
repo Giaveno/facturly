@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { validateComprobante, type ComprobanteAmbiente, type ComprobanteItem, type ComprobanteValidationInput } from "@/domain/comprobantes";
 import { ArcaBusinessError } from "@/adapters/arca/errors";
+import { assertEmissionConfiguration, EmissionConfigurationError, EmissionDisabledError } from "@/adapters/arca/emissions";
 import { comprobantes, clients, emissionSeriesClaims, issuedInvoices } from "@/lib/db/schema";
 import type { Db } from "@/lib/db/types";
 import type { ArcaGateway, FECAEReq, IssueInvoiceResult } from "@/ports/arca-gateway";
@@ -22,6 +23,7 @@ export const LEGACY_SERIES_RECOVERY_REQUIRED = "La serie contiene una reserva le
 export class ComprobanteEmissionError extends Error {
   constructor(message: string) { super(message); this.name = "ComprobanteEmissionError"; }
 }
+export { EmissionConfigurationError, EmissionDisabledError };
 
 export interface ComprobanteEmissionInput extends Omit<ComprobanteValidationInput, "ambiente" | "estado" | "cae" | "caeVto"> {
   empresaId: string;
@@ -176,7 +178,7 @@ export function comprobanteToFecaReq(row: typeof comprobantes.$inferSelect, orig
     cbtesAsoc: fecaAssociation(original),
   };
 }
-function rejectionReason(error: ArcaBusinessError): string { return `${error.code ? `Código ARCA ${error.code}` : "Rechazo ARCA"}: ${error.message}`; }
+function rejectionReason(error: ArcaBusinessError): string { return `Rechazo ARCA${error.code ? ` (${error.code})` : ""}: ${error.message}`; }
 function isMatchingResult(row: typeof comprobantes.$inferSelect, result: IssueInvoiceResult): boolean {
   const evidence = result as IssueInvoiceResult & { importeTotalCentavos?: number; importeNetoCentavos?: number; importeIvaCentavos?: number };
   return result.cbteNro === row.cbteNro &&
@@ -248,6 +250,8 @@ export interface SeriesRecoveryInput {
  * generation. This function never calls FECAESolicitar.
  */
 export async function recoverSeriesClaim(deps: ComprobanteEmissionDeps, input: SeriesRecoveryInput): Promise<void> {
+  if (deps.env) assertEmissionConfiguration(deps.env);
+  else if (input.environment === "produccion") assertEmissionConfiguration({ EMISSIONS_ENABLED: "true", ARCA_ENV: "production" });
   const expectedKey = seriesKey(input.environment, input.emisorCuit, input.ptoVta, input.cbteTipo);
   if (input.key !== expectedKey) throw new ComprobanteEmissionError("La clave de recuperación no coincide con la serie solicitada.");
   const observed = await claimFor(deps.db, input.key);
@@ -287,7 +291,10 @@ async function persistById(db: Db, key: string, id: string, patch: Partial<typeo
 }
 
 export async function emitComprobante(deps: ComprobanteEmissionDeps, input: ComprobanteEmissionInput): Promise<ComprobanteEmissionResult> {
-  const configuredEnvironment = deps.environment ?? resolveArcaEnvironment(process.env);
+  const env = deps.env;
+  if (env) assertEmissionConfiguration(env);
+  else if (deps.environment === "production") assertEmissionConfiguration({ EMISSIONS_ENABLED: "true", ARCA_ENV: "production" });
+  const configuredEnvironment = deps.environment ?? resolveArcaEnvironment(env ?? { ARCA_ENV: "homologacion" });
   const environment: ComprobanteAmbiente = configuredEnvironment === "production" ? "produccion" : configuredEnvironment;
   const now = deps.now ?? (() => new Date());
   const validated = validateComprobante({ ...input, ambiente: environment, estado: "borrador" });

@@ -16,3 +16,32 @@ export function readEmissionsEnabled(
   if (v === undefined || v.trim() === "") return false;
   return v.trim().toLowerCase() === "true";
 }
+
+export const EMISSION_DISABLED_MESSAGE = "La emisión está deshabilitada en este servidor (configuración)";
+export const EMISSION_HOMOLOGATION_REQUIRED_MESSAGE = EMISSION_DISABLED_MESSAGE;
+
+export class EmissionConfigurationError extends Error {
+  readonly code: "EMISSIONS_DISABLED" | "EMISSIONS_HOMOLOGATION_REQUIRED";
+  readonly status = 503;
+  readonly publicMessage: string;
+  constructor(message: string, code: EmissionConfigurationError["code"]) {
+    super(message);
+    this.name = "EmissionConfigurationError";
+    this.code = code;
+    this.publicMessage = message;
+  }
+}
+
+export class EmissionDisabledError extends EmissionConfigurationError {
+  constructor() {
+    super(EMISSION_DISABLED_MESSAGE, "EMISSIONS_DISABLED");
+    this.name = "EmissionDisabledError";
+  }
+}
+
+export function assertEmissionConfiguration(env: Record<string, string | undefined> = process.env): void {
+  if (!readEmissionsEnabled(env)) throw new EmissionDisabledError();
+  if (env.ARCA_ENV !== "homologacion") {
+    throw new EmissionConfigurationError(EMISSION_HOMOLOGATION_REQUIRED_MESSAGE, "EMISSIONS_HOMOLOGATION_REQUIRED");
+  }
+}

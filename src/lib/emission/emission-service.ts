@@ -44,6 +44,7 @@ import {
   type EmissionStage,
 } from "@/adapters/arca/errors";
 import { uncertainGraceMs, SERIES_BLOCKED_MESSAGE } from "./comprobante-emission-service";
+import { assertEmissionConfiguration, EmissionDisabledError } from "@/adapters/arca/emissions";
 import type { QueryCategory } from "@/adapters/arca/query-diagnostics";
 import {
   noopLogger,
@@ -85,6 +86,7 @@ export interface EmissionDeps {
   metrics?: ArcaMetrics;
   /** Operational/test override; production defaults to 3× the ARCA call budget. */
   uncertainGraceMs?: number;
+  env?: Record<string, string | undefined>;
 }
 
 export interface EmissionResult {
@@ -233,7 +235,7 @@ function isValidPinnedResult(request: FECAEReq, result: IssueInvoiceResult | nul
 
 /** A durable claim covers allocation, reservation, dispatch and persistence. */
 export async function emitInvoice(deps: EmissionDeps, allocator: NumberAllocator, invoiceId: string): Promise<EmissionResult> {
-  if (!deps.emissionsEnabled) throw new EmissionError("Emissions are disabled; refusing to reserve a number");
+  if (!deps.emissionsEnabled) throw new EmissionDisabledError();
   const { client, invoice } = await loadInvoiceContext(deps.db, invoiceId);
   const [existing] = await deps.db.select().from(issuedInvoices).where(eq(issuedInvoices.invoiceId,invoiceId));
   // Recovery is read-only on ARCA: never call FECAESolicitar for a reservation.
@@ -279,9 +281,7 @@ async function emitWithSeriesClaim(
   const logger = deps.logger ?? noopLogger;
   const metrics = deps.metrics ?? noopMetrics;
   if (!deps.emissionsEnabled) {
-    throw new EmissionError(
-      "Emissions are disabled (EMISSIONS_ENABLED=false) — refusing to reserve a number",
-    );
+    throw new EmissionDisabledError();
   }
 
   const { invoice, row, client } = await loadInvoiceContext(db, invoiceId);
@@ -588,10 +588,9 @@ export async function emitBatch(
   deps: EmissionDeps,
   invoiceIds?: string[],
 ): Promise<EmissionBatchResult[]> {
+  if (deps.env) assertEmissionConfiguration(deps.env);
   if (!deps.emissionsEnabled) {
-    throw new EmissionError(
-      "Emissions are disabled (EMISSIONS_ENABLED=false) — nothing will be reserved",
-    );
+    throw new EmissionDisabledError();
   }
   const ids = invoiceIds ?? (await listApprovedInvoiceIds(deps.db));
   const allocator = makeAllocator(deps);
@@ -612,10 +611,9 @@ export async function emitBatch(
 export async function recoverStuckEmissions(
   deps: EmissionDeps,
 ): Promise<EmissionBatchResult[]> {
+  if (deps.env) assertEmissionConfiguration(deps.env);
   if (!deps.emissionsEnabled) {
-    throw new EmissionError(
-      "Emissions are disabled (EMISSIONS_ENABLED=false) — nothing will be recovered",
-    );
+    throw new EmissionDisabledError();
   }
   const ids = await listRecoverableInvoiceIds(deps.db);
   const allocator = makeAllocator(deps);

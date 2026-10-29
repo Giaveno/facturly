@@ -9,6 +9,7 @@ import { assertSameOrigin, isForbiddenOriginError } from "@/lib/auth/origin";
 import { buildArcaGateway } from "@/lib/emission/gateway";
 import { emitComprobante, ComprobanteEmissionError } from "@/lib/emission/comprobante-emission-service";
 import { creditNoteTypeFor, type InvoiceCbteTipo } from "@/domain/policy";
+import { EmissionConfigurationError } from "@/adapters/arca/emissions";
 
 function errorJson(status: number, error: string, correlationId: string) { return NextResponse.json({ error, correlationId }, { status }); }
 
@@ -37,5 +38,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       items: (Array.isArray(original.items) ? original.items : []) as never,
     });
     return NextResponse.json(result, { status: result.estado === "aprobado" ? 200 : 202 });
-  } catch (error) { const message = error instanceof Error ? error.message : "Credit note failed"; return errorJson(error instanceof ComprobanteEmissionError ? 422 : 500, message, correlationId); }
+  } catch (error) {
+    if (error instanceof EmissionConfigurationError) {
+      return NextResponse.json({ error: error.publicMessage, correlationId, code: error.code, status: "deshabilitada" }, { status: error.status });
+    }
+    const message = error instanceof Error ? error.message : "Credit note failed";
+    return errorJson(error instanceof ComprobanteEmissionError ? 422 : 500, message, correlationId);
+  }
 }

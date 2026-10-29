@@ -8,6 +8,7 @@ import { signTraCms } from "./wsaa";
 import { generateSelfSignedCert } from "@/test-support/pkcs7";
 import type { FECAEReq } from "@/ports/arca-gateway";
 import { ArcaBusinessError } from "./errors";
+import { EmissionDisabledError } from "./emissions";
 import { createInMemoryMetrics } from "./logger";
 
 const FIXED_NOW = new Date("2026-09-22T15:00:00.000Z");
@@ -415,8 +416,8 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
       padron: new PadronA5Client({ url: "y", transport: padronT }),
       emissionsEnabled: false, // default is false anyway
     });
-    await expect(gateway.issueInvoice(REQ)).rejects.toBeInstanceOf(ArcaBusinessError);
-    await expect(gateway.issueInvoice(REQ)).rejects.toThrow(/disabled/);
+    await expect(gateway.issueInvoice(REQ)).rejects.toBeInstanceOf(EmissionDisabledError);
+    await expect(gateway.issueInvoice(REQ)).rejects.toThrow("La emisi\u00f3n est\u00e1 deshabilitada en este servidor (configuraci\u00f3n)");
   });
 });
 
@@ -456,6 +457,7 @@ describe("arca-gateway.prod — factory", () => {
       },
       taStore: inMemoryStore(),
       emissionsEnabled: true,
+      env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" },
     });
     const condicion = await gateway.getIvaCondition("20123456786", "30710145764");
     expect(condicion).toBe("ri");

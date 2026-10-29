@@ -33,12 +33,16 @@ export const emitBatchJob = inngest.createFunction(
   },
   async ({ event, step }) => {
     const invoiceIds = event.data.invoiceIds as string[] | undefined;
+    const emissionsEnabled = readEmissionsEnabled();
+    if (!emissionsEnabled) {
+      return { emitted: 0, alreadyEmitted: 0, failed: 0, outcomes: [], skipped: true, reason: "emissions-disabled" };
+    }
     const results = await step.run("emit-batch", () =>
       emitBatch(
         {
           db: getDb(),
           gateway: buildArcaGateway(getDb()),
-          emissionsEnabled: readEmissionsEnabled(),
+          emissionsEnabled,
           delayMs: 1000,
         },
         invoiceIds,

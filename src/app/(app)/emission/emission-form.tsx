@@ -7,11 +7,13 @@ type Item = { descripcion: string; neto: string; alicuota: string };
 
 interface FiscalError { code?: string | number; message?: string }
 
-export function interpretEmissionResponse(data: Record<string, unknown>): { kind: "success" | "rejected" | "blocked"; text: string; retryAllowed: boolean } {
+export function interpretEmissionResponse(data: Record<string, unknown>): { kind: "success" | "rejected" | "blocked" | "disabled"; text: string; retryAllowed: boolean } {
   const errors = Array.isArray(data.errors) ? data.errors : data.code ? [{ code: data.code, message: data.message ?? data.error }] : [];
   const detail = errors.map((error: FiscalError) => `${error.code ?? "ARCA"}: ${error.message ?? "Error fiscal"}`).join(" · ");
   const storedError = typeof data.errores === "string" ? data.errores : "";
   const text = detail || storedError || (typeof data.error === "string" ? data.error : "") || (typeof data.message === "string" ? data.message : "") || "No se pudo emitir el comprobante.";
+  if (data.code === "EMISSIONS_DISABLED") return { kind: "disabled", text: "La emisión está deshabilitada en este servidor (configuración)", retryAllowed: false };
+  if (data.code === "EMISSIONS_HOMOLOGATION_REQUIRED") return { kind: "disabled", text, retryAllowed: false };
   if (data.estado === "aprobado") return { kind: "success", text: `Comprobante emitido${data.cae ? ` · CAE ${data.cae}` : ""}.`, retryAllowed: true };
   const blocked = data.estado === "incierto" || data.code === "SERIES_BLOCKED" || data.status === "incierto" || /serie bloqueada|incierto|conciliaci/i.test(String(text));
   return { kind: blocked ? "blocked" : "rejected", text: blocked ? `${text} No reintentes a ciegas: verificá la serie antes de continuar.` : text, retryAllowed: !blocked };

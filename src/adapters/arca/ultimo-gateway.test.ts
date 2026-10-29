@@ -11,7 +11,7 @@ describe("ultimo gateway authentication preservation", () => {
       const code = codes.shift();
       return `<Envelope><Body><FECompUltimoAutorizadoResponse><FECompUltimoAutorizadoResult>${code ? `<Errors><Err><Code>${code}</Code><Msg>SECRET</Msg></Err></Errors>` : "<CbteNro>0</CbteNro>"}</FECompUltimoAutorizadoResult></FECompUltimoAutorizadoResponse></Body></Envelope>`;
     });
-    const gateway = new ArcaGatewayProd({ taCache, wsfe: new WsfeClient({ url: "https://offline.invalid", transport: { post } }), padron: {} as PadronA5Client, emissionsEnabled: true });
+    const gateway = new ArcaGatewayProd({ taCache, wsfe: new WsfeClient({ url: "https://offline.invalid", transport: { post } }), padron: {} as PadronA5Client, emissionsEnabled: true, environment: "homologacion" });
     return { gateway, post, taCache };
   };
   it("accepts explicit first-invoice zero without refreshing", async () => {
