@@ -2,8 +2,11 @@ import { and, eq, isNull } from "drizzle-orm";
 import { emissionSeriesClaims } from "@/lib/db/schema";
 import type { Db } from "@/lib/db/types";
 export const SERIES_LEASE_MS = 180_000;
-export function seriesKey(environment: "production" | "homologacion", cuit: string, ptoVta: number, cbteTipo: number): string {
-  return JSON.stringify([environment,cuit,ptoVta,cbteTipo]);
+export function seriesKey(environment: "production" | "produccion" | "homologacion", cuit: string, ptoVta: number, cbteTipo: number): string {
+ // `comprobantes` stores the Spanish enum value, while legacy invoices use
+ // the server-config value. Claims must be shared across both aggregates.
+ const canonicalEnvironment = environment === "produccion" ? "production" : environment;
+ return JSON.stringify([canonicalEnvironment,cuit,ptoVta,cbteTipo]);
 }
 /** Atomic compare-and-set, shared by every worker. Never steal even an expired claim. */
 export async function acquireSeriesClaim(db: Db, key: string, owner: string, now = Date.now()): Promise<boolean> {

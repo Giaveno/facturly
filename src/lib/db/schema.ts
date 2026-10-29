@@ -28,6 +28,7 @@ import {
   boolean,
   check,
   date,
+  index,
   integer,
   type AnyPgColumn,
   jsonb,
@@ -40,7 +41,7 @@ import {
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import type { OcrFields } from "../../ports/ocr-provider";
 import type { RecipientMode } from "@/domain/receipt";
 import type { ApprovalSnapshot } from "@/domain/approval-snapshot";
@@ -441,6 +442,7 @@ export const comprobantes = pgTable(
   },
   (table) => [
     uniqueIndex("comprobantes_idempotency_key_unique").on(table.empresaId, table.idempotencyKey),
+    index("comprobantes_incierto_empresa_created_at_idx").on(table.empresaId, desc(table.createdAt)),
     uniqueIndex("comprobantes_fiscal_identity_unique")
       .on(table.ambiente, table.emisorCuit, table.ptoVta, table.cbteTipo, table.cbteNro)
       .where(sql`${table.cbteNro} IS NOT NULL AND ${table.estado} <> 'rechazado'`),
@@ -450,6 +452,7 @@ export const comprobantes = pgTable(
     check("comprobantes_concepto_check", sql`${table.concepto} IN (1, 2, 3)`),
     check("comprobantes_aprobado_requirements_check", sql`${table.estado} <> 'aprobado' OR (${table.cae} IS NOT NULL AND ${table.caeVto} IS NOT NULL AND ${table.cbteNro} IS NOT NULL)`),
     check("comprobantes_pendiente_requirements_check", sql`${table.estado} <> 'pendiente' OR ${table.cbteNro} IS NOT NULL`),
+    check("comprobantes_incierto_require_number_check", sql`${table.estado} <> 'incierto' OR ${table.cbteNro} IS NOT NULL`),
     check("comprobantes_importes_non_negative_check", sql`${table.importeNetoCentavos} >= 0 AND ${table.importeIvaCentavos} >= 0 AND ${table.importeExentoCentavos} >= 0 AND ${table.importeTributosCentavos} >= 0 AND ${table.importeTotalCentavos} >= 0`),
     check("comprobantes_importes_total_check", sql`${table.importeTotalCentavos} = ${table.importeNetoCentavos} + ${table.importeIvaCentavos} + ${table.importeExentoCentavos} + ${table.importeTributosCentavos}`),
   ],

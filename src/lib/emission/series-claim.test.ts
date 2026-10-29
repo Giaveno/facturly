@@ -14,6 +14,9 @@ it("serializes across independent allocators/process owners and isolates environ
  // Uncertainty never expires into permission to emit. Restart must consult first.
  expect(await acquireSeriesClaim(handle.db,key,"owner-c",999999999)).toBe(false);
 });
+it("canonicalizes the Spanish production enum to the shared production claim key", () => {
+ expect(seriesKey("produccion", "20123456786", 1, 11)).toBe(seriesKey("production", "20123456786", 1, 11));
+});
 it("only the owner can release a successful claim; expired claims are not stolen", async () => {
  const key = seriesKey("homologacion", "20123456786", 2, 11);
  expect(await acquireSeriesClaim(handle.db,key,"owner-a",1000)).toBe(true);

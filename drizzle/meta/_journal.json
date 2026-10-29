@@ -71,6 +71,13 @@
       "when": 1793303576130,
       "tag": "0009_cool_earthquake",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793304000000,
+      "tag": "0010_incierto_reservation",
+      "breakpoints": true
     }
   ]
 }
