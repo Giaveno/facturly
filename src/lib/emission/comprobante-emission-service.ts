@@ -6,7 +6,7 @@ import { comprobantes, clients, emissionSeriesClaims, issuedInvoices } from "@/l
 import type { Db } from "@/lib/db/types";
 import type { ArcaGateway, FECAEReq, IssueInvoiceResult } from "@/ports/arca-gateway";
 import { resolveArcaEnvironment } from "./environment";
-import { acquireSeriesClaim, finishSeriesClaim, ownsSeriesClaim, reconcileSeriesClaim, SERIES_LEASE_MS, seriesKey } from "./series-claim";
+import { acquireExpiredSeriesClaim, acquireSeriesClaim, finishSeriesClaim, ownsSeriesClaim, reconcileSeriesClaim, SERIES_LEASE_MS, seriesKey } from "./series-claim";
 import { arcaTimeouts } from "@/adapters/arca/timeouts";
 type SeriesClaim = typeof emissionSeriesClaims.$inferSelect;
 
@@ -201,16 +201,21 @@ export async function recoverSeriesClaim(deps: ComprobanteEmissionDeps, input: S
     const uncertainAt = observed.uncertainSinceMs ?? observed.leaseExpiresAtMs;
     if (nowMs - uncertainAt < grace) throw new ComprobanteEmissionError(SERIES_BLOCKED_MESSAGE);
   }
-  const legacyEnvironment = input.environment === "produccion" ? "production" : "homologacion";
-  const legacyRows = await deps.db.select({ id: issuedInvoices.id }).from(issuedInvoices).where(and(
-    eq(issuedInvoices.cuit, input.emisorCuit), eq(issuedInvoices.ptoVta, input.ptoVta), eq(issuedInvoices.cbteTipo, input.cbteTipo),
-    isNull(issuedInvoices.cae), or(eq(issuedInvoices.environment, legacyEnvironment), isNull(issuedInvoices.environment)),
-  ));
-  if (legacyRows.length > 0) throw new ComprobanteEmissionError(LEGACY_SERIES_RECOVERY_REQUIRED);
-  await reconcileOrphans(deps.db, deps, input.key, input.environment, input.emisorCuit, input.ptoVta, input.cbteTipo);
-  const current = await claimFor(deps.db, input.key);
-  if (!current) return;
-  await withSeriesLock(deps.db, input.key, async (tx) => reconcileSeriesClaim(tx, current));
+  const owner = randomUUID();
+  if (!await acquireExpiredSeriesClaim(deps.db, observed, owner, nowMs)) throw new ComprobanteEmissionError(SERIES_BLOCKED_MESSAGE);
+  let reconciled = false;
+  try {
+    const legacyEnvironment = input.environment === "produccion" ? "production" : "homologacion";
+    const legacyRows = await deps.db.select({ id: issuedInvoices.id }).from(issuedInvoices).where(and(
+      eq(issuedInvoices.cuit, input.emisorCuit), eq(issuedInvoices.ptoVta, input.ptoVta), eq(issuedInvoices.cbteTipo, input.cbteTipo),
+      isNull(issuedInvoices.cae), or(eq(issuedInvoices.environment, legacyEnvironment), isNull(issuedInvoices.environment)),
+    ));
+    if (legacyRows.length > 0) throw new ComprobanteEmissionError(LEGACY_SERIES_RECOVERY_REQUIRED);
+    await reconcileOrphans(deps.db, deps, input.key, input.environment, input.emisorCuit, input.ptoVta, input.cbteTipo);
+    reconciled = true;
+  } finally {
+    await finishSeriesClaim(deps.db, input.key, owner, reconciled, (deps.now ?? (() => new Date()))().getTime());
+  }
 }
 function resultFromRow(row: typeof comprobantes.$inferSelect, emitted: boolean): ComprobanteEmissionResult {
   return { id: row.id, empresaId: row.empresaId, estado: row.estado as ComprobanteEmissionResult["estado"], cbteNro: row.cbteNro, cae: row.cae, caeVto: row.caeVto, resultado: row.resultado, errores: row.errores, emitted };
@@ -233,23 +238,27 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
   const key = seriesKey(environment, validated.emisorCuit, validated.ptoVta, validated.cbteTipo);
   const owner = randomUUID();
 
+  const initialClaim = await claimFor(deps.db, key);
+  if (initialClaim?.owner) await waitForNoOwner(deps.db, key);
   const staleClaim = await claimFor(deps.db, key);
-  if (staleClaim?.owner) await waitForNoOwner(deps.db, key);
   const grace = deps.uncertainGraceMs ?? uncertainGraceMs(environment, deps.env ?? process.env);
   if (staleClaim?.uncertain && !staleClaim.owner) {
     const uncertainAt = staleClaim.uncertainSinceMs ?? staleClaim.leaseExpiresAtMs;
     if ((now().getTime() - uncertainAt) < grace) throw new ComprobanteEmissionError(SERIES_BLOCKED_MESSAGE);
   }
-  await reconcileOrphans(deps.db, deps, key, environment, validated.emisorCuit, validated.ptoVta, validated.cbteTipo);
-  const postReconciliationOrphans = await readOrphans(deps.db, key, environment, validated.emisorCuit, validated.ptoVta, validated.cbteTipo);
-  if (postReconciliationOrphans.length > 0) throw new ComprobanteEmissionError(RECONCILIATION_UNCERTAIN_REASON);
   if (staleClaim?.uncertain && !staleClaim.owner) await clearUncertainClaim(deps.db, key, staleClaim);
   await claimSeries(deps.db, key, owner);
 
   let authorized = false;
   let reservationPersisted = false;
   let uncertainOutcome = false;
+  let reconciliationCompleted = false;
   try {
+    await reconcileOrphans(deps.db, deps, key, environment, validated.emisorCuit, validated.ptoVta, validated.cbteTipo);
+    const postReconciliationOrphans = await readOrphans(deps.db, key, environment, validated.emisorCuit, validated.ptoVta, validated.cbteTipo);
+    if (postReconciliationOrphans.length > 0) throw new ComprobanteEmissionError(RECONCILIATION_UNCERTAIN_REASON);
+    if (!await ownsSeriesClaim(deps.db, key, owner, () => now().getTime())) throw new ComprobanteEmissionError(SERIES_BLOCKED_MESSAGE);
+    reconciliationCompleted = true;
     const [empresa] = await deps.db.select({ cuit: clients.cuit }).from(clients).where(eq(clients.id, input.empresaId));
     if (!empresa || empresa.cuit !== validated.emisorCuit) throw new ComprobanteEmissionError("La empresa no coincide con el CUIT emisor del comprobante.");
     const existing = await readByIdempotency(deps.db, input.empresaId, input.idempotencyKey);
@@ -315,7 +324,7 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
       return resultFromRow(uncertain, false);
     }
   } finally {
-    await releaseClaim(deps.db, key, owner, authorized || !reservationPersisted || !uncertainOutcome, now().getTime());
+    await releaseClaim(deps.db, key, owner, authorized || (!uncertainOutcome && (reservationPersisted || reconciliationCompleted)), now().getTime());
   }
 }
 export const emitFiscalComprobante = emitComprobante;

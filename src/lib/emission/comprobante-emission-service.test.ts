@@ -16,7 +16,7 @@ import {
   uncertainGraceMs,
   SERIES_BLOCKED_MESSAGE,
 } from "./comprobante-emission-service";
-import { seriesKey } from "./series-claim";
+import { acquireSeriesClaim, finishSeriesClaim, seriesKey } from "./series-claim";
 
 describe("comprobante emission service", () => {
   let handle: Awaited<ReturnType<typeof createTestDb>>;
@@ -222,6 +222,43 @@ describe("comprobante emission service", () => {
     expect(first.estado).toBe("aprobado");
     expect(second.estado).toBe("aprobado");
     expect(calls).toBe(2);
+  });
+
+  it("serializes orphan reconciliation with a concurrent emission claim", async () => {
+    const empresa = await company();
+    await insertDraft(empresa, "reconcile-race", { estado: "incierto", cbteNro: 1 });
+    const key = seriesKey("homologacion", "20123456786", 1, 1);
+    await acquireSeriesClaim(handle.db, key, "expired-owner", Date.now() - 1);
+    await finishSeriesClaim(handle.db, key, "expired-owner", true, Date.now() - 1);
+    const base = new ArcaGatewayFake(undefined, () => new Date());
+    let consultStarted!: () => void;
+    const started = new Promise<void>((resolve) => { consultStarted = resolve; });
+    let releaseConsult!: () => void;
+    const release = new Promise<void>((resolve) => { releaseConsult = resolve; });
+    let consultCalls = 0;
+    const gateway = {
+      getIvaCondition: base.getIvaCondition.bind(base),
+      ultimoAutorizado: base.ultimoAutorizado.bind(base),
+      consultInvoice: async () => {
+        consultCalls += 1;
+        consultStarted();
+        await release;
+        return null;
+      },
+      issueInvoice: base.issueInvoice.bind(base),
+    };
+    const recovery = recoverSeriesClaim({ db: handle.db, gateway, environment: "homologacion", now: () => new Date(), uncertainGraceMs: 0 }, {
+      key, environment: "homologacion", emisorCuit: "20123456786", ptoVta: 1, cbteTipo: 1,
+    });
+    await started;
+    const emission = emitComprobante({ db: handle.db, gateway, environment: "homologacion", now: () => new Date(), uncertainGraceMs: 0 }, input(empresa, "after-reconcile-race"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseConsult();
+    await recovery;
+    await expect(emission).resolves.toMatchObject({ estado: "aprobado", cbteNro: 1 });
+    expect(consultCalls).toBe(1);
+    const [orphan] = await handle.db.select().from(comprobantes).where(eq(comprobantes.idempotencyKey, "reconcile-race"));
+    expect(orphan).toMatchObject({ estado: "rechazado", resultado: "R" });
   });
 
   it("keeps the reservation when a failure happens before ARCA is called", async () => {
