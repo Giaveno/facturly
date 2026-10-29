@@ -3,7 +3,6 @@ import type { PointOfSale, WsfeAuth } from "@/adapters/arca/wsfe";
 import type { TipoCbte } from "@/adapters/arca/wsfe-diagnostics";
 import { ArcaQueryError, safeQueryDiagnostic, type QueryDiagnostic } from "@/adapters/arca/query-diagnostics";
 import { ArcaError } from "@/adapters/arca/errors";
-import type { TaCacheEntry, TaCacheStore } from "@/adapters/arca/ta-cache";
 
 export interface DiagnosticReservation { invoiceId: string; request: FECAEReq; trustworthy: boolean }
 export interface DiagnosticSession {
@@ -26,11 +25,6 @@ function diagnostic(error:unknown, operation?:string): QueryDiagnostic|undefined
  if(error instanceof ArcaQueryError)return error.diagnostic;
  if(error instanceof ArcaError)return safeQueryDiagnostic({stage:operation==="auth"?"wsaa":"wsfe",category:error.category??"internal",providerCodes:error.providerCodes,httpStatus:error.httpStatus});
  return undefined;
-}
-/** Existing cache reads are allowed; new tickets/deletions never reach durable storage. */
-export function memoryOnlyTicketStore(read:(key:string)=>Promise<TaCacheEntry|null>):TaCacheStore {
- const memory=new Map<string,TaCacheEntry|null>();
- return {get:async key=>memory.has(key)?memory.get(key)!:read(key),put:async(key,value)=>{memory.set(key,value);},delete:async key=>{memory.set(key,null);}};
 }
 /** No environment normalization, issue retries, worker invocation or implicit issuance. */
 export async function runDiagnostic(deps:{environment:string|undefined;open:(clientId:string)=>Promise<DiagnosticSession>},options:DiagnosticOptions):Promise<DiagnosticReport> {

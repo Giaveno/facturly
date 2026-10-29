@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@/lib/db/types";
-import { clients, credentials, diagnosticIssuance, invoices, issuedInvoices, taCache } from "@/lib/db/schema";
+import { clients, credentials, diagnosticIssuance, invoices, issuedInvoices } from "@/lib/db/schema";
+import { DrizzleTaCacheStore } from "@/lib/db/ta-cache-store";
 import { decryptPrivateKey, deriveAesKey } from "@/lib/db/credentials";
 import { assertKeyMatchesCertificate, inspectCertificate } from "@/lib/credentials/pem";
 import { createCredentialTaCache } from "@/adapters/arca/credential-ta-cache";
@@ -19,7 +20,7 @@ import { loadInvoiceContext } from "@/lib/review/workflow";
 import { createApprovalSnapshot, matchesApprovalSnapshot, parseApprovalSnapshot } from "@/domain/approval-snapshot";
 import { assertRowEmittable } from "@/domain/emission";
 import type { FECAEReq, IssueInvoiceResult } from "@/ports/arca-gateway";
-import { memoryOnlyTicketStore, type DiagnosticReservation, type DiagnosticSession } from "./diagnostic";
+import { type DiagnosticReservation, type DiagnosticSession } from "./diagnostic";
 
 function sameRequest(a:FECAEReq,b:FECAEReq):boolean {
  return (Object.keys(b) as (keyof FECAEReq)[]).every(key=>key==="taxRate"?(a[key]??null)===(b[key]??null):a[key]===b[key]);
@@ -67,7 +68,7 @@ export async function createDiagnosticSession(db:Db,env:Record<string,string|und
   return new Response(response.body.pipeThrough(limited),{status:response.status,headers:response.headers});
  }});
  const wsfe=new WsfeClient({url:WSFE_HOMOLOGACION_URL,transport});
- const store=memoryOnlyTicketStore(async key=>{const [entry]=await db.select({token:taCache.token,sign:taCache.sign,issuedAt:taCache.issuedAtMs,expiresAt:taCache.expiresAtMs}).from(taCache).where(eq(taCache.service,key));return entry??null;});
+ const store=new DrizzleTaCacheStore(db);
  let sessionAuth: WsfeAuth | undefined;
  let claimed:{key:string;owner:string;invoiceId:string;request:FECAEReq;reservationId:string;dispatched:boolean}|undefined;
  return {

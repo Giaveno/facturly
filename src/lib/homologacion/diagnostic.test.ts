@@ -1,6 +1,6 @@
 import { ArcaBusinessError } from "@/adapters/arca/errors";
 import { describe, expect, it, vi } from "vitest";
-import { runDiagnostic, memoryOnlyTicketStore, type DiagnosticSession } from "./diagnostic";
+import { runDiagnostic, type DiagnosticSession } from "./diagnostic";
 import type { FECAEReq } from "@/ports/arca-gateway";
 const request: FECAEReq = {cuit:"20123456786",ptoVta:3,cbteTipo:11,cbteNro:1,receptorDocTipo:99,receptorDocNro:0,condicionIvaReceptorId:5,receptorRazonSocial:"Consumidor Final",fechaEmision:"2026-10-28",fechaVto:"2026-10-28",moneda:"PES",cotizacion:1,importeNeto:625000,importeIva:0,importeTotal:625000,taxRate:null};
 function setup() {
@@ -33,7 +33,7 @@ describe("homologacion one-shot diagnostic",()=>{
   const s=setup();for(const environment of [undefined,"production"," homologacion "]) await expect(runDiagnostic({environment,open:s.open},{clientId:"client"})).rejects.toThrow("homologacion");
   expect(s.open).not.toHaveBeenCalled();
  });
- it("defaults to ordered read-only probes without claiming, issuing or persisting TA",async()=>{
+ it("defaults to ordered read-only probes without claiming or issuing",async()=>{
   const s=setup();const report=await runDiagnostic({environment:"homologacion",open:s.open},{clientId:"client"});
   expect(s.calls).toEqual(["dummy","auth","points","ultimo","types"]);expect(report.emitted).toBe(false);
  });
@@ -65,10 +65,6 @@ describe("homologacion one-shot diagnostic",()=>{
  it("fails closed if one-shot marker already exists",async()=>{
   const s=setup();s.session.beginOnce=async()=>{throw Error("existing marker");};
   expect((await runDiagnostic({environment:"homologacion",open:s.open},{clientId:"client",emitOnce:true,expected:request,invoiceId:"invoice"})).emitted).toBe(false);expect(s.calls).not.toContain("issue");
- });
- it("TA writes/deletes remain memory-only and preserve existing scoped entries",async()=>{
-  const read=vi.fn(async()=>null);const store=memoryOnlyTicketStore(read);
-  const entry={token:"fake",sign:"fake",issuedAt:1,expiresAt:2};await store.put("scope:wsfe",entry);expect(await store.get("scope:wsfe")).toEqual(entry);expect(read).not.toHaveBeenCalled();await store.delete?.("scope:wsfe");expect(await store.get("scope:wsfe")).toBeNull();expect(read).not.toHaveBeenCalled();
  });
 });
 

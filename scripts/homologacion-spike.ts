@@ -21,8 +21,8 @@
  *   3. Each client's Punto de Venta habilitated for `wsfe` (ABM Puntos de Venta).
  *
  * Environment variables (see .env.example for the full list):
- *   ARCA_ENV                 homologacion | production (default: homologacion)
- *   ARCA_CONFIRM_PRODUCTION  must be "yes" to run against production (safety)
+ *   ARCA_ENV                 must be homologacion (default: homologacion)
+ *   DATABASE_URL             same Neon database as the app (REQUIRED)
  *   ARCA_CERT_PEM            X.509 certificate PEM inline   (or ARCA_CERT_FILE)
  *   ARCA_KEY_FILE            private key PEM FILE PATH (REQUIRED — never inline)
  *   ARCA_CLIENT_CUIT         the delegated CLIENT CUIT (REQUIRED)
@@ -37,11 +37,13 @@
  * vars leak via process listings, child processes, crash dumps, and CI logs).
  *
  * Exit codes: 0 = PASS, 1 = criterion FAIL, 2 = missing creds/misconfigured,
- *             3 = network/timeout (transient — retry).
+ *             3 = network/timeout (uncertain — do not blindly retry).
  */
 
 import { readFileSync } from "node:fs";
-import { WsaaClient } from "../src/adapters/arca/wsaa";
+import { createCredentialTaCache } from "../src/adapters/arca/credential-ta-cache";
+import { DrizzleTaCacheStore } from "../src/lib/db/ta-cache-store";
+import { getDb } from "../src/lib/db/client";
 import {
   WsfeClient,
   type FecaesolicitarRequest,
@@ -51,10 +53,7 @@ import { createFetchTransport } from "../src/adapters/arca/http";
 import { ArcaTransientError } from "../src/adapters/arca/errors";
 import {
   WSAA_HOMOLOGACION_URL,
-  WSAA_PRODUCTION_URL,
   WSFE_HOMOLOGACION_URL,
-  WSFE_PRODUCTION_URL,
-  type ArcaEnvironment,
 } from "../src/adapters/arca/constants";
 
 function failMisconfigured(message: string): never {
@@ -95,16 +94,12 @@ function loadKeyPem(): string {
 
 async function main(): Promise<void> {
   const envName = env("ARCA_ENV") ?? "homologacion";
-  if (envName !== "homologacion" && envName !== "production") {
-    failMisconfigured(`ARCA_ENV must be "homologacion" or "production" (got "${envName}")`);
+  if (envName !== "homologacion") {
+    failMisconfigured('ARCA_ENV must be "homologacion"; production is not supported.');
   }
-  const arcaEnv: ArcaEnvironment = envName;
-
-  if (arcaEnv === "production" && env("ARCA_CONFIRM_PRODUCTION") !== "yes") {
-    failMisconfigured(
-      "Refusing to run against PRODUCTION without explicit confirmation. This " +
-        "emits a REAL fiscal comprobante. Set ARCA_CONFIRM_PRODUCTION=yes to proceed.",
-    );
+  const arcaEnv = envName;
+  if (!env("DATABASE_URL")) {
+    failMisconfigured("DATABASE_URL is required: use the same Neon database as the app for persistent WSAA tickets.");
   }
 
   const clientCuit = env("ARCA_CLIENT_CUIT");
@@ -121,10 +116,8 @@ async function main(): Promise<void> {
   const ptoVta = Number(env("ARCA_PTO_VTA") ?? "1");
   const cbteTipo = Number(env("ARCA_CBTE_TIPO") ?? "6");
 
-  const wsaaUrl =
-    arcaEnv === "production" ? WSAA_PRODUCTION_URL : WSAA_HOMOLOGACION_URL;
-  const wsfeUrl =
-    arcaEnv === "production" ? WSFE_PRODUCTION_URL : WSFE_HOMOLOGACION_URL;
+  const wsaaUrl = WSAA_HOMOLOGACION_URL;
+  const wsfeUrl = WSFE_HOMOLOGACION_URL;
   // 20s per-call timeout so a hung ARCA call cannot pin the harness forever.
   const transport = createFetchTransport({ timeoutMs: 20_000 });
 
@@ -133,14 +126,15 @@ async function main(): Promise<void> {
   console.log(`  WSFEv1: ${wsfeUrl}`);
   console.log(`  Client CUIT: ${clientCuit}  PtoVta: ${ptoVta}  CbteTipo: ${cbteTipo}\n`);
 
-  // 1. Obtain ONE TA with the accountant's certificate (wsfe service).
-  console.log("[1/3] WSAA LoginCms (wsfe) with the accountant's certificate…");
-  const wsaa = new WsaaClient({
+  // 1. Reuse the app's certificate/endpoint/service-scoped durable ticket.
+  console.log("[1/3] Obtain wsfe ticket through the persistent app cache…");
+  const cache = createCredentialTaCache({
     url: wsaaUrl,
     credentials: { certPem, keyPem },
     transport,
+    store: new DrizzleTaCacheStore(getDb()),
   });
-  const ta = await wsaa.loginCms("wsfe");
+  const ta = await cache.get("wsfe");
   console.log("      TA obtained (token/sign held in memory, never printed).");
 
   // 2. Determine the next comprobante number.
@@ -180,11 +174,11 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   if (err instanceof ArcaTransientError) {
-    console.error(`\n✗ TRANSIENT — network/timeout: ${err.message}\n`);
+    console.error("\n✗ TRANSIENT — network/timeout; outcome may be uncertain. Do not blindly retry.\n");
     process.exit(3);
   }
   console.error(
-    `\n✗ FAIL — unexpected error: ${err instanceof Error ? err.message : err}\n`,
+    "\n✗ FAIL — diagnostic stopped safely; no automatic retry.\n",
   );
   process.exit(1);
 });

@@ -44,7 +44,7 @@ it("auth-only reuses a valid existing certificate/service/endpoint-scoped TA wit
  await db.delete(schema.taCache);
 });
 afterAll(async()=>{await raw.close();});
-it("runs real adapter preflight against pre-0008 schema, reports PV 602, still runs catalog, never writes a TA",async()=>{
+it("persists a new scoped TA during preflight and reuses it in a fresh session",async()=>{
  const operations:string[]=[];
  const fetchFn=vi.fn(async(_url:URL|RequestInfo,init?:RequestInit)=>{
   const body=String(init?.body??"");
@@ -57,6 +57,15 @@ it("runs real adapter preflight against pre-0008 schema, reports PV 602, still r
  const report=await runDiagnostic({environment:"homologacion",open:id=>createDiagnosticSession(db,{ARCA_ENV:"homologacion",AES_KEY:AES},id,{fetchFn})},{clientId});
  expect(report.migrationReady).toBe(false);expect(report.emitted).toBe(false);expect(operations).toEqual(["dummy","wsaa","points","types"]);
  expect(report.steps.find(s=>s.operation==="points")).toMatchObject({status:"blocked",diagnostic:{providerCodes:[602]}});
- expect(await db.select().from(schema.taCache)).toEqual([]);
+ const entries=await db.select().from(schema.taCache);
+ expect(entries).toHaveLength(1);
+ const [credential]=await db.select({certPem:schema.credentials.certPem}).from(schema.credentials);
+ expect(entries[0]).toMatchObject({service:`${WSAA_HOMOLOGACION_URL}:${certificateFingerprint(credential!.certPem)}:wsfe`,token:"OFFLINE_TOKEN",sign:"OFFLINE_SIGN"});
+ const noNetwork=vi.fn(async()=>{throw Error("Must reuse persisted ticket");});
+ const next=await createDiagnosticSession(db,{ARCA_ENV:"homologacion",AES_KEY:AES},clientId,{authOnly:true,fetchFn:noNetwork});
+ expect(await next.auth()).toEqual({token:"OFFLINE_TOKEN",sign:"OFFLINE_SIGN",cuit:"20123456786"});
+ await next.close();
+ expect(noNetwork).not.toHaveBeenCalled();
+ expect(await db.select().from(schema.taCache)).toEqual(entries);
  expect(fetchFn.mock.calls.every(([,init])=>init?.redirect==="error")).toBe(true);
 });
