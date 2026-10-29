@@ -88,6 +88,22 @@ export const condicionIva = pgEnum("condicion_iva", [
   "consumidorFinal",
 ]);
 
+/** Fiscal lifecycle for the comprobante aggregate (independent from legacy invoices). */
+export const comprobanteEstado = pgEnum("comprobante_estado", [
+  "borrador",
+  "pendiente",
+  "aprobado",
+  "rechazado",
+  "incierto",
+]);
+
+/** Issuer conditions allowed on a comprobante snapshot (consumer final cannot issue). */
+export const comprobanteEmisorCondicionIva = pgEnum("comprobante_emisor_condicion_iva", [
+  "ri",
+  "monotributista",
+  "exento",
+]);
+
 /** The accountant — sole user (spec). */
 export const accountant = pgTable("accountant", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -374,3 +390,56 @@ export const diagnosticIssuance = pgTable("diagnostic_issuance", {
   authorizationHash: text("authorization_hash").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+
+/**
+ * Fiscal comprobante draft/result record. Monetary values are integer centavos
+ * (bigint in PostgreSQL), never floating point. `empresaId` points to the
+ * configured issuer; the issuer CUIT/condition are retained as an explicit
+ * snapshot so a later emission cannot silently change fiscal identity.
+ */
+export const comprobantes = pgTable(
+  "comprobantes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    empresaId: uuid("empresa_id")
+      .notNull()
+      .references(() => clients.id),
+    emisorCuit: text("emisor_cuit").notNull(),
+    emisorCondicionIva: comprobanteEmisorCondicionIva("emisor_condicion_iva").notNull(),
+    cbteTipo: integer("cbte_tipo").notNull(),
+    ptoVta: integer("pto_vta").notNull(),
+    cbteNro: bigint("cbte_nro", { mode: "number" }),
+    concepto: integer("concepto").notNull().default(1),
+    docTipo: integer("doc_tipo").notNull(),
+    docNro: text("doc_nro").notNull(),
+    condicionIvaReceptor: integer("condicion_iva_receptor").notNull(),
+    fecha: date("fecha").notNull(),
+    importeNetoCentavos: bigint("importe_neto_centavos", { mode: "number" }).notNull(),
+    importeIvaCentavos: bigint("importe_iva_centavos", { mode: "number" }).notNull(),
+    importeExentoCentavos: bigint("importe_exento_centavos", { mode: "number" }).notNull(),
+    importeTributosCentavos: bigint("importe_tributos_centavos", { mode: "number" }).notNull(),
+    importeTotalCentavos: bigint("importe_total_centavos", { mode: "number" }).notNull(),
+    items: jsonb("items").notNull().default(sql`'[]'::jsonb`),
+    estado: comprobanteEstado("estado").notNull().default("borrador"),
+    cae: text("cae"),
+    caeVto: date("cae_vto"),
+    resultado: text("resultado"),
+    observaciones: text("observaciones"),
+    errores: text("errores"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    cbteAsociado: jsonb("cbte_asociado"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("comprobantes_idempotency_key_unique").on(table.idempotencyKey),
+    check("comprobantes_pto_vta_check", sql`${table.ptoVta} BETWEEN 1 AND 99999`),
+    check("comprobantes_cbte_nro_check", sql`${table.cbteNro} IS NULL OR ${table.cbteNro} BETWEEN 1 AND 9999999`),
+    check("comprobantes_concepto_check", sql`${table.concepto} IN (1, 2, 3)`),
+    check("comprobantes_doc_tipo_check", sql`${table.docTipo} IN (80, 86, 87, 89, 90, 91, 92, 93, 94, 95, 96, 99)`),
+    check("comprobantes_condicion_iva_receptor_check", sql`${table.condicionIvaReceptor} IN (1, 4, 5, 6)`),
+    check("comprobantes_doc_99_condicion_check", sql`${table.docTipo} <> 99 OR ${table.condicionIvaReceptor} = 5`),
+    check("comprobantes_importes_non_negative_check", sql`${table.importeNetoCentavos} >= 0 AND ${table.importeIvaCentavos} >= 0 AND ${table.importeExentoCentavos} >= 0 AND ${table.importeTributosCentavos} >= 0 AND ${table.importeTotalCentavos} >= 0`),
+    check("comprobantes_importes_total_check", sql`${table.importeTotalCentavos} = ${table.importeNetoCentavos} + ${table.importeIvaCentavos} + ${table.importeExentoCentavos} + ${table.importeTributosCentavos}`),
+  ],
+);
