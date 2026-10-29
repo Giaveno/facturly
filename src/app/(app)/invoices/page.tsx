@@ -4,6 +4,7 @@ import { ReservedAttempts } from "./reserved-attempts";
 import { getDb } from "@/lib/db/client";
 import { listIssuedInvoices } from "@/lib/invoices/read-model";
 import { formatCentavos } from "@/domain/money";
+import ComprobantesList from "./comprobantes-list";
 
 /**
  * Invoices page — lists issued invoices (status, client, comprobante type,
@@ -60,6 +61,7 @@ export default async function InvoicesPage() {
         </table></div>
       )}
       <ReservedAttempts rows={attempts} enabled={process.env.ARCA_ENV === "homologacion"} />
+      <ComprobantesList />
     </main>
   );
 }

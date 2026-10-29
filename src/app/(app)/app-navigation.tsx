@@ -7,6 +7,7 @@ const links = [
   ["/", "Cargar comprobantes"],
   ["/review", "Revisión"],
   ["/invoices", "Facturas"],
+  ["/emission", "Emitir comprobante"],
   ["/clients", "Clientes"],
   ["/cuit-lookup", "Consulta de CUIT"],
 ] as const;
@@ -14,6 +15,7 @@ const titles: Record<string, string> = {
   "/": "Cargar comprobantes",
   "/review": "Revisión",
   "/invoices": "Facturas",
+  "/emission": "Emitir comprobante",
   "/clients": "Clientes",
   "/cuit-lookup": "Consulta de CUIT",
   "/credentials": "Credenciales ARCA",
