@@ -9,9 +9,10 @@
  * invoice has a real CAE (and is otherwise fully materialized).
  */
 
-import { eq, isNotNull } from "drizzle-orm";
-import { clients, invoices, issuedInvoices } from "@/lib/db/schema";
-import type { InvoicePdfInput } from "@/pdf/render";
+import { and, eq, isNotNull } from "drizzle-orm";
+import { clients, comprobantes, invoices, issuedInvoices } from "@/lib/db/schema";
+import type { ComprobantePdfInput, InvoicePdfInput } from "@/pdf/render";
+import type { ComprobanteItem } from "@/domain/comprobantes";
 import type { CbteTipo } from "@/domain/policy";
 import type { Db } from "@/lib/db/types";
 
@@ -119,5 +120,39 @@ export async function loadIssuedInvoicePdfInput(
     condicionIvaReceptorId: row.condicionIvaReceptorId!,
     receptorRazonSocial: row.receptorRazonSocial!,
     environment: row.approvalSnapshot?.environment,
+  };
+}
+
+/** Loads only an approved comprobante, with its issuer/company snapshot. */
+export async function loadApprovedComprobantePdfInput(
+  db: Db,
+  id: string,
+  expectedEmpresaId: string,
+): Promise<ComprobantePdfInput | null> {
+  const conditions = [eq(comprobantes.id, id), eq(comprobantes.estado, "aprobado" as const)];
+  conditions.push(eq(comprobantes.empresaId, expectedEmpresaId));
+  const [row] = await db.select({
+    id: comprobantes.id, empresaId: comprobantes.empresaId, issuerName: clients.razonSocial,
+    issuerCuit: comprobantes.emisorCuit, environment: comprobantes.ambiente, cbteTipo: comprobantes.cbteTipo,
+    ptoVta: comprobantes.ptoVta, cbteNro: comprobantes.cbteNro, fecha: comprobantes.fecha,
+    docTipo: comprobantes.docTipo, docNro: comprobantes.docNro, condicionIvaReceptor: comprobantes.condicionIvaReceptor,
+    receptorRazonSocial: clients.razonSocial, neto: comprobantes.importeNetoCentavos,
+    iva: comprobantes.importeIvaCentavos, exento: comprobantes.importeExentoCentavos,
+    tributos: comprobantes.importeTributosCentavos, total: comprobantes.importeTotalCentavos,
+    items: comprobantes.items, cae: comprobantes.cae, caeVto: comprobantes.caeVto,
+  }).from(comprobantes).innerJoin(clients, eq(comprobantes.empresaId, clients.id)).where(and(...conditions));
+  if (!row || !row.cae || !row.caeVto || row.cbteNro == null) return null;
+  if ([row.neto, row.iva, row.exento, row.tributos, row.total, row.condicionIvaReceptor].some((v) => v == null)) return null;
+  return {
+    empresaId: row.empresaId, issuerName: row.issuerName, issuerCuit: row.issuerCuit,
+    environment: row.environment, cbteTipo: row.cbteTipo as CbteTipo, ptoVta: row.ptoVta,
+    cbteNro: row.cbteNro, fecha: row.fecha, docTipo: row.docTipo, docNro: row.docNro,
+    // The comprobantes schema intentionally has no receptor name snapshot.
+    // Never substitute the issuer name; use only an explicit safe fallback.
+    receptorRazonSocial: row.docTipo === 99 ? "Consumidor Final" : `Documento ${row.docNro}`,
+    condicionIvaReceptor: row.condicionIvaReceptor!,
+    importeNetoCentavos: row.neto!, importeIvaCentavos: row.iva!, importeExentoCentavos: row.exento!,
+    importeTributosCentavos: row.tributos!, importeTotalCentavos: row.total!,
+    items: (Array.isArray(row.items) ? row.items : []) as ComprobanteItem[], cae: row.cae, caeVto: row.caeVto,
   };
 }
