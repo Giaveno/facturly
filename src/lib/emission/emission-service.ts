@@ -43,6 +43,7 @@ import {
   safeEmissionError,
   type EmissionStage,
 } from "@/adapters/arca/errors";
+import { uncertainGraceMs, SERIES_BLOCKED_MESSAGE } from "./comprobante-emission-service";
 import type { QueryCategory } from "@/adapters/arca/query-diagnostics";
 import {
   noopLogger,
@@ -82,6 +83,8 @@ export interface EmissionDeps {
   delayMs?: number;
   logger?: ArcaLogger;
   metrics?: ArcaMetrics;
+  /** Operational/test override; production defaults to 3× the ARCA call budget. */
+  uncertainGraceMs?: number;
 }
 
 export interface EmissionResult {
@@ -224,6 +227,11 @@ export async function emitInvoice(deps: EmissionDeps, allocator: NumberAllocator
     const key = seriesKey(deps.environment ?? resolveArcaEnvironment(process.env),client.cuit,client.ptoVta,invoice.cbteTipo ?? 0);
     const [claim] = await deps.db.select().from(emissionSeriesClaims).where(eq(emissionSeriesClaims.seriesKey,key));
     if (!existing.cae && claim?.owner && claim.leaseExpiresAtMs > Date.now()) throw new EmissionError("Series is actively dispatching; consultation/recovery must wait");
+    if (!existing.cae && claim?.uncertain && !claim.owner) {
+      const uncertainAt = claim.uncertainSinceMs ?? claim.leaseExpiresAtMs;
+      const environment = deps.environment ?? resolveArcaEnvironment(process.env);
+      if (Date.now() - uncertainAt < (deps.uncertainGraceMs ?? uncertainGraceMs(environment, process.env))) throw new EmissionError(SERIES_BLOCKED_MESSAGE);
+    }
     const recovered = await emitWithSeriesClaim(deps,allocator,invoiceId,undefined,
       claim && !existing.cae ? async tx => { await reconcileSeriesClaim(tx,claim); } : undefined);
     return recovered;
@@ -405,7 +413,21 @@ async function emitWithSeriesClaim(
     } else {
       if(!dispatchGuard)throw new EmissionError("Dispatch claim is required");
       await dispatchGuard();
-      result = await gateway.issueInvoice(request, dispatchGuard);
+      // The legacy path shares the durable claim but must also revalidate the
+      // remote head immediately before FECAESolicitar. If ARCA has advanced
+      // beyond the pinned number, consult it and never reissue that number.
+      let latest: number;
+      try { latest = await gateway.ultimoAutorizado(request.cuit, request.ptoVta, request.cbteTipo); }
+      catch { throw new ArcaTransientError("Unable to revalidate ARCA series head", { stage: "ultimo" }); }
+      if (!Number.isInteger(latest) || latest < 0 || latest > 99_999_999) throw new ArcaTransientError("ARCA series head was malformed", { stage: "ultimo", category: "malformed-response" });
+      if (latest >= request.cbteNro) {
+        if (!gateway.consultInvoice) throw new ArcaTransientError("Pinned reservation requires read-only consultation", { stage: "issuance" });
+        const observed = await gateway.consultInvoice(request);
+        if (!observed) throw new ArcaTransientError("Pinned reservation remains unresolved", { stage: "issuance" });
+        result = observed;
+      } else {
+        result = await gateway.issueInvoice(request, dispatchGuard);
+      }
     }
   } catch (rawError) {
     const err = rawError instanceof EmissionError ? rawError : safeEmissionError(rawError, "issuance");

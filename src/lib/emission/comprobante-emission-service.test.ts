@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import { ArcaBusinessError } from "@/adapters/arca/errors";
 import { ArcaGatewayFake } from "@/adapters/arca/arca-gateway.fake";
 import type { ArcaGateway } from "@/ports/arca-gateway";
@@ -11,7 +12,9 @@ import {
   RECONCILIATION_NOT_FOUND_REASON,
   RECONCILIATION_UNCERTAIN_REASON,
   uncertainGraceMs,
+  SERIES_BLOCKED_MESSAGE,
 } from "./comprobante-emission-service";
+import { seriesKey } from "./series-claim";
 
 describe("comprobante emission service", () => {
   let handle: Awaited<ReturnType<typeof createTestDb>>;
@@ -21,6 +24,7 @@ describe("comprobante emission service", () => {
   afterAll(async () => { await handle.close(); });
   beforeEach(async () => {
     await handle.db.delete(comprobantes);
+    await handle.db.delete(emissionSeriesClaims);
     await handle.db.delete(clients);
   });
 
@@ -28,6 +32,29 @@ describe("comprobante emission service", () => {
     expect(uncertainGraceMs("homologacion", {})).toBe(75_000);
     expect(uncertainGraceMs("production", {})).toBe(60_000);
     expect(uncertainGraceMs("homologacion", { ARCA_UNCERTAIN_GRACE_MS: "1234" })).toBe(1234);
+  });
+
+  it("does not clear a newer uncertain claim generation during reconciliation", async () => {
+    const empresa = await company();
+    const base = new ArcaGatewayFake(undefined, now);
+    const timedOut = {
+      getIvaCondition: base.getIvaCondition.bind(base),
+      ultimoAutorizado: base.ultimoAutorizado.bind(base),
+      consultInvoice: base.consultInvoice.bind(base),
+      issueInvoice: async () => { throw new Error("network timeout"); },
+    };
+    await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", now, uncertainGraceMs: 0 }, input(empresa, "generation-a"));
+    const key = seriesKey("homologacion", "20123456786", 1, 1);
+    const recovering = {
+      getIvaCondition: base.getIvaCondition.bind(base),
+      ultimoAutorizado: base.ultimoAutorizado.bind(base),
+      consultInvoice: async () => {
+        await handle.db.update(emissionSeriesClaims).set({ leaseExpiresAtMs: 2_000, uncertainSinceMs: 2_000 }).where(eq(emissionSeriesClaims.seriesKey, key));
+        return null;
+      },
+      issueInvoice: async () => { throw new Error("must not issue"); },
+    };
+    await expect(emitComprobante({ db: handle.db, gateway: recovering, environment: "homologacion", now, uncertainGraceMs: 0 }, input(empresa, "generation-b"))).rejects.toThrow(SERIES_BLOCKED_MESSAGE);
   });
 
   async function company(cuit = "20123456786") {
@@ -133,7 +160,7 @@ describe("comprobante emission service", () => {
     };
     const uncertain = await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", now }, input(empresa, "timeout"));
     expect(uncertain).toMatchObject({ estado: "incierto", cbteNro: 1, errores: EMISSION_UNCERTAIN_REASON });
-    const next = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", now }, input(empresa, "next"));
+    const next = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", now, uncertainGraceMs: 0 }, input(empresa, "next"));
     expect(next.cbteNro).toBe(1);
     const [orphan] = await handle.db.select().from(comprobantes);
     expect(orphan!.errores).toBe(RECONCILIATION_NOT_FOUND_REASON);
@@ -154,7 +181,7 @@ describe("comprobante emission service", () => {
     const uncertain = await emitComprobante({ db: handle.db, gateway: timedOutAfterAuthorization, environment: "homologacion", now }, input(empresa, "timeout-authorized"));
     expect(uncertain).toMatchObject({ estado: "incierto", cbteNro: 1 });
 
-    const recovered = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", now }, input(empresa, "after-reconciliation"));
+    const recovered = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", now, uncertainGraceMs: 0 }, input(empresa, "after-reconciliation"));
     expect(recovered.cbteNro).toBe(2);
     const rows = await handle.db.select().from(comprobantes);
     expect(rows.find((row) => row.id === uncertain.id)).toMatchObject({ estado: "aprobado", cae: expect.any(String) });

@@ -28,10 +28,14 @@ async function main() {
   if (!Number.isInteger(ptoVta) || ptoVta < 1 || ptoVta > 99999) throw new Error("--pto-vta is invalid");
   if (![1, 6, 11].includes(cbteTipo)) throw new Error("--cbte-tipo is invalid");
   const canonicalEnvironment = environment === "production" ? "produccion" : environment;
+  const gatewayEnvironment = canonicalEnvironment === "produccion" ? "production" : "homologacion";
+  const gatewayEnv = { ...process.env, ARCA_ENV: gatewayEnvironment };
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 5000, query_timeout: 30000, statement_timeout: 30000, max: 1 });
   const db = drizzle(pool, { schema });
   try {
-    const deps: ComprobanteEmissionDeps = { db, gateway: buildArcaGateway(db), environment: canonicalEnvironment };
+    // The requested series environment is authoritative for every WSAA/WSFE
+    // endpoint. Never let a process-level ARCA_ENV route recovery elsewhere.
+    const deps: ComprobanteEmissionDeps = { db, gateway: buildArcaGateway(db, gatewayEnv), environment: canonicalEnvironment, env: gatewayEnv };
     await recoverSeriesClaim(deps, { key: seriesKey(environment, cuit, ptoVta, cbteTipo), environment: canonicalEnvironment, emisorCuit: cuit, ptoVta, cbteTipo });
     console.log(JSON.stringify({ recovered: true, series: { environment: canonicalEnvironment, cuit, ptoVta, cbteTipo } }));
   } finally {

@@ -247,7 +247,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     expect(result).toMatchObject({ outcome: "failed_permanent", stage: "issuance", category: "malformed-response" });
     expect(result!.error).toContain("outcome uncertain");
     expect(JSON.stringify(result)).not.toContain("SECRET");
-    expect(operations).toEqual(["ultimo", "issuance", "consultation"]);
+    expect(operations).toEqual(["ultimo", "ultimo", "issuance", "consultation"]);
     expect((await db.select().from(invoices).where(eq(invoices.id, invoiceId)))[0]!.status).toBe("EMIT_FAILED");
     expect(await db.select().from(issuedInvoices).where(eq(issuedInvoices.invoiceId, invoiceId))).toEqual([expect.objectContaining({ cbteNro: 1, cae: null })]);
     expect(await listRecoverableInvoiceIds(db)).not.toContain(invoiceId);
@@ -292,6 +292,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     gateway,
     emissionsEnabled,
     delayMs: 0,
+    uncertainGraceMs: 0,
   });
 
   it("ultimo rejection is safe and permanent before reservation; explicit retry uses the same approved invoice", async () => {
@@ -385,8 +386,9 @@ describe("emission service — idempotency reservation + status machine", () => 
     );
 
     expect(results.map((r) => r.cbteNro)).toEqual([1, 2]);
-    // FECompUltimoAutorizado queried exactly once (not once per invoice).
-    expect(counting.ultimoAutorizadoCalls).toBe(2);
+    // Fresh reservations query FECompUltimoAutorizado for allocation and again
+    // immediately before dispatch; each invoice performs both checks.
+    expect(counting.ultimoAutorizadoCalls).toBe(4);
     // Emitted serially in order.
     expect(counting.issueCalls).toEqual([1, 2]);
   });

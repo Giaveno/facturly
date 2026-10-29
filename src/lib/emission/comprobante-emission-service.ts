@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { validateComprobante, type ComprobanteAmbiente, type ComprobanteItem, type ComprobanteValidationInput } from "@/domain/comprobantes";
 import { ArcaBusinessError } from "@/adapters/arca/errors";
-import { comprobantes, clients, emissionSeriesClaims } from "@/lib/db/schema";
+import { comprobantes, clients, emissionSeriesClaims, issuedInvoices } from "@/lib/db/schema";
 import type { Db } from "@/lib/db/types";
 import type { ArcaGateway, FECAEReq, IssueInvoiceResult } from "@/ports/arca-gateway";
 import { resolveArcaEnvironment } from "./environment";
@@ -16,6 +16,7 @@ export const RECONCILIATION_UNCERTAIN_REASON = "No se pudo confirmar el comproba
 export const EMISSION_UNCERTAIN_REASON = "El resultado de ARCA es incierto después de reservar el número; requiere verificación manual.";
 export const IDEMPOTENCY_CONFLICT_REASON = "La clave de idempotencia ya pertenece a otro emisor o serie fiscal.";
 export const SERIES_BLOCKED_MESSAGE = "serie bloqueada, pendiente de conciliación";
+export const LEGACY_SERIES_RECOVERY_REQUIRED = "La serie contiene una reserva legacy pendiente; use la recuperación legacy de emisión antes de liberar el bloqueo.";
 
 export class ComprobanteEmissionError extends Error {
   constructor(message: string) { super(message); this.name = "ComprobanteEmissionError"; }
@@ -77,10 +78,12 @@ async function claimFor(db: Db, key: string): Promise<SeriesClaim | undefined> {
 async function releaseClaim(db: Db, key: string, owner: string, authorized: boolean, timestamp = Date.now()): Promise<void> {
   await withSeriesLock(db, key, async (tx) => finishSeriesClaim(tx, key, owner, authorized, timestamp));
 }
-async function clearUncertainClaim(db: Db, key: string): Promise<void> {
+async function clearUncertainClaim(db: Db, key: string, observed: SeriesClaim): Promise<void> {
   await withSeriesLock(db, key, async (tx) => {
-    await tx.update(emissionSeriesClaims).set({ uncertain: false }).where(and(
+    await tx.update(emissionSeriesClaims).set({ uncertain: false, uncertainSinceMs: null }).where(and(
       eq(emissionSeriesClaims.seriesKey, key), isNull(emissionSeriesClaims.owner), eq(emissionSeriesClaims.uncertain, true),
+      eq(emissionSeriesClaims.leaseExpiresAtMs, observed.leaseExpiresAtMs),
+      observed.uncertainSinceMs === null ? isNull(emissionSeriesClaims.uncertainSinceMs) : eq(emissionSeriesClaims.uncertainSinceMs, observed.uncertainSinceMs),
     ));
   });
 }
@@ -195,6 +198,12 @@ export async function recoverSeriesClaim(deps: ComprobanteEmissionDeps, input: S
     const uncertainAt = observed.uncertainSinceMs ?? observed.leaseExpiresAtMs;
     if (nowMs - uncertainAt < grace) throw new ComprobanteEmissionError(SERIES_BLOCKED_MESSAGE);
   }
+  const legacyEnvironment = input.environment === "produccion" ? "production" : "homologacion";
+  const legacyRows = await deps.db.select({ id: issuedInvoices.id }).from(issuedInvoices).where(and(
+    eq(issuedInvoices.cuit, input.emisorCuit), eq(issuedInvoices.ptoVta, input.ptoVta), eq(issuedInvoices.cbteTipo, input.cbteTipo),
+    isNull(issuedInvoices.cae), or(eq(issuedInvoices.environment, legacyEnvironment), isNull(issuedInvoices.environment)),
+  ));
+  if (legacyRows.length > 0) throw new ComprobanteEmissionError(LEGACY_SERIES_RECOVERY_REQUIRED);
   await reconcileOrphans(deps.db, deps, input.key, input.environment, input.emisorCuit, input.ptoVta, input.cbteTipo);
   const current = await claimFor(deps.db, input.key);
   if (!current) return;
@@ -223,9 +232,7 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
 
   const staleClaim = await claimFor(deps.db, key);
   if (staleClaim?.owner) await waitForNoOwner(deps.db, key);
-  // A caller-supplied clock is a deterministic test/maintenance seam; callers
-  // that need production grace with a custom clock must pass it explicitly.
-  const grace = deps.uncertainGraceMs ?? (deps.now ? 0 : uncertainGraceMs(environment, deps.env ?? process.env));
+  const grace = deps.uncertainGraceMs ?? uncertainGraceMs(environment, deps.env ?? process.env);
   if (staleClaim?.uncertain && !staleClaim.owner) {
     const uncertainAt = staleClaim.uncertainSinceMs ?? staleClaim.leaseExpiresAtMs;
     if ((now().getTime() - uncertainAt) < grace) throw new ComprobanteEmissionError(SERIES_BLOCKED_MESSAGE);
@@ -233,7 +240,7 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
   await reconcileOrphans(deps.db, deps, key, environment, validated.emisorCuit, validated.ptoVta, validated.cbteTipo);
   const postReconciliationOrphans = await readOrphans(deps.db, key, environment, validated.emisorCuit, validated.ptoVta, validated.cbteTipo);
   if (postReconciliationOrphans.length > 0) throw new ComprobanteEmissionError(RECONCILIATION_UNCERTAIN_REASON);
-  if (staleClaim?.uncertain && !staleClaim.owner) await clearUncertainClaim(deps.db, key);
+  if (staleClaim?.uncertain && !staleClaim.owner) await clearUncertainClaim(deps.db, key, staleClaim);
   await claimSeries(deps.db, key, owner);
 
   let authorized = false;
