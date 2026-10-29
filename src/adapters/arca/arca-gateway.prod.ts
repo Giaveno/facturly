@@ -17,8 +17,7 @@
  *   - Success is gated on `resultado === "A"` (a `Resultado=R` carrying a CAE is
  *     rejected, not accepted).
  *
- * Auth-retry (W5): an `ArcaAuthError` evicts the TA and retries ONCE with a
- * fresh ticket before giving up.
+ * Read-only queries may refresh authentication once. Issuance never retries.
  */
 
 import { createHash } from "node:crypto";
@@ -44,7 +43,6 @@ import {
 import { noopLogger, noopMetrics, type ArcaLogger, type ArcaMetrics } from "./logger";
 import { readEmissionsEnabled } from "./emissions";
 import { ArcaQueryError } from "./query-diagnostics";
-import { ArcaTransientError } from "./errors";
 
 export interface ArcaGatewayProdOptions {
   taCache: Pick<TaCache, "get" | "evict">;
@@ -97,34 +95,59 @@ export class ArcaGatewayProd implements ArcaGateway {
     });
   }
 
-  async issueInvoice(req: FECAEReq): Promise<IssueInvoiceResult> {
+  async issueInvoice(req: FECAEReq, beforeDispatch?: () => Promise<void>): Promise<IssueInvoiceResult> {
     if (!this.emissionsEnabled) {
       throw new ArcaBusinessError(
         "Emissions are disabled (EMISSIONS_ENABLED=false) — refusing to contact ARCA",
       );
     }
-    // IDEMPOTENCY GUARD (slice-4 obligation, NOT enforced here):
-    // The caller has already reserved `req.cbteNro` by inserting a row into
-    // `issued_invoices` BEFORE calling this method. That table's unique index
-    // `issued_invoices_idempotency (cuit, pto_vta, cbte_tipo, cbte_nro)` is the
-    // PHYSICAL guard that makes a duplicate real emission impossible. This
-    // adapter is a pure SOAP boundary and does NOT own the reservation write;
-    // the emission job (slice 4, `src/jobs/emit.ts`) performs reserve→emit→
-    // update-with-CAE in one transaction. This adapter only guarantees that the
-    // number ARCA is asked to emit is the CALLER-PINNED `req.cbteNro` (never
-    // derived from FECompUltimoAutorizado), so a retry replays the SAME number
-    // and an existing fiscal record must be checked rather than assumed.
-    return this.withFreshTaOnAuth(ARCA_SERVICE_WSFE, async (ta) => {
-      return this.emit(ta, req);
-    });
+    // The caller owns a durable environment/series claim and reservation.
+    // A unique row alone does not serialize dispatch of an existing reservation.
+    // An issuance is never retried, even after an authentication error.
+    const ta = await this.taCache.get(ARCA_SERVICE_WSFE);
+    return this.emit(ta, req, beforeDispatch);
   }
 
-  private async emit(ta: WsaaTa, req: FECAEReq): Promise<IssueInvoiceResult> {
+  async consultInvoice(req: FECAEReq): Promise<IssueInvoiceResult | null> {
+    const ta = await this.taCache.get(ARCA_SERVICE_WSFE);
+    return this.consultWithTa(ta, req);
+  }
+
+  private async consultWithTa(ta: WsaaTa, req: FECAEReq): Promise<IssueInvoiceResult | null> {
+    const auth = {token:ta.token,sign:ta.sign,cuit:req.cuit}, cbteNro=req.cbteNro;
+    let existing;
+    try { existing = await this.wsfe.consultarComprobante(auth, {ptoVta:req.ptoVta,cbteTipo:req.cbteTipo,cbteNro}); }
+    catch (error) {
+      if (error instanceof ArcaQueryError && error.diagnostic.category === "provider-errors" && error.diagnostic.providerCodes?.length === 1 && error.diagnostic.providerCodes[0] === 602) return null;
+      if (error instanceof ArcaQueryError) throw new ArcaBusinessError("ARCA issuance outcome uncertain; read-only verification required", {stage:"issuance",category:error.diagnostic.category,providerCodes:error.diagnostic.providerCodes,httpStatus:error.diagnostic.httpStatus});
+      throw error;
+    }
+      if (existing.resultado === "A" && existing.emissionType === "CAE" && existing.cae !== null && existing.caeFchVto !== null &&
+        existing.cbteNro === cbteNro && existing.ptoVta === req.ptoVta && existing.cbteTipo === req.cbteTipo &&
+        existing.impTotalCentavos === req.importeTotal && existing.impNetoCentavos === req.importeNeto && existing.impIvaCentavos === req.importeIva &&
+        existing.moneda === req.moneda && existing.cotizacion === req.cotizacion && existing.docTipo === req.receptorDocTipo &&
+        existing.docNro === req.receptorDocNro && existing.fechaEmision === req.fechaEmision.replaceAll("-", "") &&
+        (existing.condicionIvaReceptorId == null || existing.condicionIvaReceptorId === req.condicionIvaReceptorId) &&
+        (existing.concepto == null || existing.concepto === 1) &&
+        [existing.impTotConcCentavos, existing.impOpExCentavos, existing.impTribCentavos].every(value => value == null || value === 0)) {
+        return {
+          cae: existing.cae,
+          caeFchVto: existing.caeFchVto,
+          cbteNro: existing.cbteNro,
+        };
+      }
+    return null;
+  }
+
+  private async emit(ta: WsaaTa, req: FECAEReq, beforeDispatch?: () => Promise<void>): Promise<IssueInvoiceResult> {
     const auth = { token: ta.token, sign: ta.sign, cuit: req.cuit };
     // Caller-pinned comprobante number (design amendment #1): never derived here.
     const cbteNro = req.cbteNro;
 
-    const result = await this.wsfe.solicitar(auth, fecaReqToSolicitar(req));
+    const payload = fecaReqToSolicitar(req);
+    // TA acquisition may outlive the lease; do not rely on the caller's earlier check.
+    await beforeDispatch?.();
+    const result = await this.wsfe.solicitar(auth, payload);
 
     // Idempotency: scan BOTH channels — ARCA reports 10015/10016 in errors OR
     // observaciones, never assume it is only in errors.
@@ -141,35 +164,8 @@ export class ArcaGatewayProd implements ArcaGateway {
         cbteNro,
         code: duplicate.code,
       });
-      let existing;
-      try {
-        existing = await this.wsfe.consultarComprobante(auth, {
-          ptoVta: req.ptoVta, cbteTipo: req.cbteTipo, cbteNro,
-        });
-      } catch (error) {
-        if (error instanceof ArcaQueryError) {
-          const d = error.diagnostic;
-          const details = { stage: "issuance" as const, category: d.category, providerCodes: d.providerCodes, httpStatus: d.httpStatus };
-          if (d.category === "network" || d.category === "timeout" || (d.category === "http" && (d.httpStatus === 429 || (d.httpStatus ?? 0) >= 500)))
-            throw new ArcaTransientError("ARCA consultation failed during issuance", details);
-          throw new ArcaBusinessError("ARCA issuance outcome uncertain; read-only verification required", details);
-        }
-        throw error;
-      }
-      if (existing.resultado === "A" && existing.emissionType === "CAE" && existing.cae !== null && existing.caeFchVto !== null &&
-        existing.cbteNro === cbteNro && existing.ptoVta === req.ptoVta && existing.cbteTipo === req.cbteTipo &&
-        existing.impTotalCentavos === req.importeTotal && existing.impNetoCentavos === req.importeNeto && existing.impIvaCentavos === req.importeIva &&
-        existing.moneda === req.moneda && existing.cotizacion === req.cotizacion && existing.docTipo === req.receptorDocTipo &&
-        existing.docNro === req.receptorDocNro && existing.fechaEmision === req.fechaEmision.replaceAll("-", "") &&
-        (existing.condicionIvaReceptorId == null || existing.condicionIvaReceptorId === req.condicionIvaReceptorId) &&
-        (existing.concepto == null || existing.concepto === 1) &&
-        [existing.impTotConcCentavos, existing.impOpExCentavos, existing.impTribCentavos].every(value => value == null || value === 0)) {
-        return {
-          cae: existing.cae,
-          caeFchVto: existing.caeFchVto,
-          cbteNro: existing.cbteNro,
-        };
-      }
+      const recovered = await this.consultWithTa(ta,req);
+      if (recovered) return recovered;
       throw new ArcaBusinessError(
         "ARCA issuance outcome uncertain; consulted fiscal evidence did not match",
         { code: duplicate.code, stage: "issuance", category: "malformed-response", providerCodes: [Number(duplicate.code)] },

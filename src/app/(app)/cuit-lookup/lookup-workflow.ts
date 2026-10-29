@@ -1,3 +1,4 @@
+import { HOMOLOGACION_UI_MS } from "@/adapters/arca/timeouts";
 import { normalizeLookupCuit, type PadronLookupReport } from "@/lib/padron/contract";
 import { safeQueryDiagnostic } from "@/adapters/arca/query-diagnostics";
 
@@ -50,7 +51,7 @@ export function createLookupWorkflow(initialFingerprint: string, publish: (state
       const cancellation = new Promise<never>((_, reject) => {
         cancel = () => reject(new Error("Request cancelled"));
         request.signal.addEventListener("abort", cancel, { once: true });
-        timer = setTimeout(() => { timedOut = true; request.abort(); }, 13_000);
+        timer = setTimeout(() => { timedOut = true; request.abort(); }, HOMOLOGACION_UI_MS);
       });
       try {
         const { response, value } = await Promise.race([(async () => {

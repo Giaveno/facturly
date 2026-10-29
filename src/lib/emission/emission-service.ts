@@ -1,37 +1,17 @@
+import { randomUUID } from "node:crypto";
+import { acquireSeriesClaim, finishSeriesClaim, reconcileSeriesClaim, ownsSeriesClaim, seriesKey } from "./series-claim";
 /**
- * Emission service — the reserve→emit→persist pipeline (slice 4).
- *
- * Per invoice row, in order:
- *   1. Enforce `EMISSIONS_ENABLED` (a paused system must not even reserve numbers).
- *   2. WIRE the domain guard `assertRowEmittable` (BLOCKED/REJECTED/PENDING/FAILED
- *      rows can never be emitted) — the review UI's disabled button is a hint,
- *      this call is the enforcement.
- *   3. Enforce the invoice status machine: only APPROVED invoices emit fresh;
- *      EMITTING/EMIT_ERROR replay a pinned reservation.
- *   4. Authorize: the client must have an ENABLED `delegations` row.
- *   5. Pin the comprobante number: an existing `issued_invoices` reservation
- *      replays its `cbteNro` (lost-response retry); otherwise the next number is
- *      allocated ONCE per `(cuit, ptoVta, cbteTipo)` per batch, seeded from
- *      `max(local cbteNro, ARCA ultimoAutorizado)` and incremented locally.
- *   6. In ONE transaction, insert the reservation row (NULL CAE) and set the
- *      invoice EMITTING — BEFORE calling ARCA. The unique index on
- *      `(cuit, ptoVta, cbteTipo, cbteNro)` AND `(invoice_id)` are the physical
- *      guards: one invoice has at most one reservation, and a number is never
- *      emitted twice.
- *   7. Call `ArcaGateway.issueInvoice` with the pinned number.
- *   8. Persist the 14-digit CAE on the SAME reservation row and set EMITTED.
- *   9. On failure, classify permanent vs transient (typed ARCA errors):
- *        - permanent (ARCA business rejection / state error) → EMIT_FAILED
- *          (terminal; the recovery sweeper NEVER re-queues it);
- *        - transient (network/timeout/auth) → EMIT_ERROR (recoverable).
- *
- * Batches emit SERIALLY with an injectable inter-call delay and are PER-ROW
- * ISOLATED: one failure is recorded and the batch continues.
+ * Reserve/send/persist under a durable environment + CUIT + PV + type claim.
+ * Fresh numbers are always validated ARCA ultimo+1. No speculative advance.
+ * A rejected/uncertain reservation blocks its series, but not other series.
+ * Existing reservations only consult: absence never grants automatic reissue.
+ * Database transactions remain short; no transaction spans a network request.
  */
 
-import { and, eq, inArray, isNull, max } from "drizzle-orm";
+import { and, eq, inArray, isNull, max, or } from "drizzle-orm";
 import {
   clients,
+  emissionSeriesClaims,
   delegations,
   invoices,
   issuedInvoices,
@@ -133,13 +113,8 @@ export interface EmissionBatchResult {
   httpStatus?: number;
 }
 
-/**
- * Allocates comprobante numbers ONCE per key, seeded from
- * `max(local cbteNro, ARCA ultimoAutorizado)` so a stale local reservation
- * (crash after commit, before ARCA) is never re-allocated to a later invoice.
- */
+/** Queries current ARCA state for each fresh reservation; never skips a local head. */
 export class NumberAllocator {
-  private readonly last = new Map<string, number>();
 
   constructor(
     private readonly gateway: ArcaGateway,
@@ -151,15 +126,6 @@ export class NumberAllocator {
   ) {}
 
   async next(cuit: string, ptoVta: number, cbteTipo: CbteTipo): Promise<number> {
-    const key = `${cuit}:${ptoVta}:${cbteTipo}`;
-    const current = this.last.get(key);
-    if (current !== undefined) {
-      const next = current + 1;
-      this.last.set(key, next);
-      return next;
-    }
-    // First number for this key: seed from BOTH ARCA and our local max, then
-    // increment locally (W3 — a stale reservation must not be re-allocated).
     let arcaLast: number;
     try {
       arcaLast = await this.gateway.ultimoAutorizado(cuit, ptoVta, cbteTipo);
@@ -172,9 +138,9 @@ export class NumberAllocator {
     const localLast = this.localMax
       ? await this.localMax(cuit, ptoVta, cbteTipo)
       : 0;
-    const next = Math.max(arcaLast, localLast) + 1;
-    this.last.set(key, next);
-    return next;
+    if (localLast > arcaLast) throw new EmissionError("Local reserved number is ahead of ARCA; unresolved series requires consultation");
+    if (arcaLast === 99_999_999) throw new EmissionError("Comprobante number range exhausted");
+    return arcaLast + 1;
   }
 }
 
@@ -225,12 +191,14 @@ async function localMaxCbteNro(
   cuit: string,
   ptoVta: number,
   cbteTipo: CbteTipo,
+  environment: "production" | "homologacion",
 ): Promise<number> {
   const [row] = await db
     .select({ m: max(issuedInvoices.cbteNro) })
     .from(issuedInvoices)
     .where(
       and(
+        or(eq(issuedInvoices.environment, environment), isNull(issuedInvoices.environment)),
         eq(issuedInvoices.cuit, cuit),
         eq(issuedInvoices.ptoVta, ptoVta),
         eq(issuedInvoices.cbteTipo, cbteTipo),
@@ -242,15 +210,48 @@ async function localMaxCbteNro(
 
 function makeAllocator(deps: EmissionDeps): NumberAllocator {
   return new NumberAllocator(deps.gateway, (cuit, ptoVta, cbteTipo) =>
-    localMaxCbteNro(deps.db, cuit, ptoVta, cbteTipo),
+    localMaxCbteNro(deps.db, cuit, ptoVta, cbteTipo, deps.environment ?? resolveArcaEnvironment(process.env)),
   );
 }
 
+/** A durable claim covers allocation, reservation, dispatch and persistence. */
+export async function emitInvoice(deps: EmissionDeps, allocator: NumberAllocator, invoiceId: string): Promise<EmissionResult> {
+  if (!deps.emissionsEnabled) throw new EmissionError("Emissions are disabled; refusing to reserve a number");
+  const { client, invoice } = await loadInvoiceContext(deps.db, invoiceId);
+  const [existing] = await deps.db.select().from(issuedInvoices).where(eq(issuedInvoices.invoiceId,invoiceId));
+  // Recovery is read-only on ARCA: never call FECAESolicitar for a reservation.
+  if (existing) {
+    const key = seriesKey(deps.environment ?? resolveArcaEnvironment(process.env),client.cuit,client.ptoVta,invoice.cbteTipo ?? 0);
+    const [claim] = await deps.db.select().from(emissionSeriesClaims).where(eq(emissionSeriesClaims.seriesKey,key));
+    if (!existing.cae && claim?.owner && claim.leaseExpiresAtMs > Date.now()) throw new EmissionError("Series is actively dispatching; consultation/recovery must wait");
+    const recovered = await emitWithSeriesClaim(deps,allocator,invoiceId,undefined,
+      claim && !existing.cae ? async tx => { await reconcileSeriesClaim(tx,claim); } : undefined);
+    return recovered;
+  }
+  const environment = deps.environment ?? resolveArcaEnvironment(process.env);
+  const key = seriesKey(environment,client.cuit,client.ptoVta,invoice.cbteTipo ?? 0), owner = randomUUID();
+  if (!await acquireSeriesClaim(deps.db,key,owner)) throw new EmissionError("Series has an active or uncertain claim; consult first, never reissue");
+  let authorized = false;
+  try {
+    const result = await emitWithSeriesClaim(deps,allocator,invoiceId,async()=>{
+      if(!await ownsSeriesClaim(deps.db,key,owner))throw new EmissionError("Dispatch claim lost/expired; consult first, never reissue");
+    }, async tx => { await finishSeriesClaim(tx,key,owner,true); });
+    authorized = true;
+    return result;
+  } finally {
+    // Before reservation, a failed guard did not dispatch; safely release that claim.
+    const [reserved] = await deps.db.select({id:issuedInvoices.id}).from(issuedInvoices).where(eq(issuedInvoices.invoiceId,invoiceId));
+    await finishSeriesClaim(deps.db,key,owner,authorized || !reserved);
+  }
+}
+
 /** Emits a single invoice (reserve → emit → persist), replaying a pinned number. */
-export async function emitInvoice(
+async function emitWithSeriesClaim(
   deps: EmissionDeps,
   allocator: NumberAllocator,
   invoiceId: string,
+  dispatchGuard?: () => Promise<void>,
+  completeOwnedClaim?: (tx: Db) => Promise<void>,
 ): Promise<EmissionResult> {
   const { db, gateway } = deps;
   const logger = deps.logger ?? noopLogger;
@@ -269,6 +270,9 @@ export async function emitInvoice(
     .select()
     .from(issuedInvoices)
     .where(eq(issuedInvoices.invoiceId, invoiceId));
+
+  const environment = deps.environment ?? resolveArcaEnvironment(process.env);
+  if (reservation && (reservation.environment !== environment || reservation.cuit !== client.cuit || reservation.ptoVta !== client.ptoVta || reservation.cbteTipo !== invoice.cbteTipo)) throw new EmissionError("Reservation provenance/series mismatch; manual read-only verification required");
 
   if (reservation?.cae) {
     return {
@@ -331,9 +335,14 @@ export async function emitInvoice(
     );
   }
 
+  if (!reservation) {
+    const blockers = await db.select({id:issuedInvoices.id,environment:issuedInvoices.environment,cae:issuedInvoices.cae}).from(issuedInvoices).where(and(eq(issuedInvoices.cuit,client.cuit),eq(issuedInvoices.ptoVta,client.ptoVta),eq(issuedInvoices.cbteTipo,cbteTipo),or(eq(issuedInvoices.environment,environment),isNull(issuedInvoices.environment))));
+    if (blockers.some(r => !r.environment || !r.cae)) throw new EmissionError("Unresolved reserved series head blocks fresh issuance; consult first");
+  }
+  const wasReserved = !!reservation;
   let cbteNro: number;
   if (reservation) {
-    // Lost-response retry: replay the PINNED number, never re-derive it.
+    // Consultation only: preserve the pinned tuple, never send it again.
     cbteNro = reservation.cbteNro;
   } else {
     cbteNro = await allocator.next(client.cuit, client.ptoVta, cbteTipo);
@@ -343,6 +352,7 @@ export async function emitInvoice(
       await db.transaction(async (tx) => {
         await tx.insert(issuedInvoices).values({
           invoiceId,
+          environment,
           cuit: client.cuit,
           ptoVta: client.ptoVta,
           cbteTipo,
@@ -386,7 +396,17 @@ export async function emitInvoice(
 
   let result: IssueInvoiceResult;
   try {
-    result = await gateway.issueInvoice(buildFecaReq(invoice, client, cbteNro));
+    const request = buildFecaReq(invoice,client,cbteNro);
+    if (wasReserved) {
+      if (!gateway.consultInvoice) throw new EmissionError("Reservation requires read-only consultation; reissue prohibited");
+      const existing = await gateway.consultInvoice(request);
+      if (!existing) throw new EmissionError("Reserved outcome unresolved; no automatic reissue");
+      result = existing;
+    } else {
+      if(!dispatchGuard)throw new EmissionError("Dispatch claim is required");
+      await dispatchGuard();
+      result = await gateway.issueInvoice(request, dispatchGuard);
+    }
   } catch (rawError) {
     const err = rawError instanceof EmissionError ? rawError : safeEmissionError(rawError, "issuance");
     const duration = Date.now() - started;
@@ -436,6 +456,9 @@ export async function emitInvoice(
       .update(invoices)
       .set({ status: "EMITTED" })
       .where(eq(invoices.id, invoiceId));
+    // This callback is bound to this dispatch's unique owner and reservation.
+    // CAE persistence and release commit together, before fallible audit/log work.
+    await completeOwnedClaim?.(tx as unknown as Db);
   });
 
   const duration = Date.now() - started;
@@ -549,11 +572,7 @@ export async function emitBatch(
   return results;
 }
 
-/**
- * Recovery sweeper: replays every invoice stuck in EMITTING/EMIT_ERROR with a
- * NULL CAE, re-driving the pinned `cbteNro` so ARCA returns 10015/10016 and the
- * CAE is recovered via FECompConsultar — no second invoice (C2).
- */
+/** Recovery consults each pinned reservation; it never sends FECAESolicitar. */
 export async function recoverStuckEmissions(
   deps: EmissionDeps,
 ): Promise<EmissionBatchResult[]> {

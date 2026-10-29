@@ -32,7 +32,7 @@ it("clears previous verification before a retry and never displays raw error tex
 });
 it("bounds even an uncooperative browser fetch", async () => {
   vi.useFakeTimers(); const flow = createPointsOfSaleWorkflow(client, fingerprint, vi.fn(), vi.fn(() => new Promise<Response>(() => {})));
-  const pending = flow.check(); await vi.advanceTimersByTimeAsync(12100); await pending;
+  const pending = flow.check(); await vi.advanceTimersByTimeAsync(70100); await pending;
   expect(flow.state().checking).toBe(false); expect(flow.state().error).not.toBe("");
 });
 it("shows safe stage, category, numeric status/codes and correlation ID without F12", async () => {

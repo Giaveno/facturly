@@ -1,3 +1,4 @@
+import { HOMOLOGACION_UI_MS } from "@/adapters/arca/timeouts";
 import type { CertificateInfo } from "@/lib/credentials/pem";
 import type { ConnectionReport } from "@/lib/credentials/connection-check";
 
@@ -31,7 +32,7 @@ export function createCredentialsWorkflow(
     const fingerprint = state.certificate.fingerprint;
     const current = ++version;
     const abort = new AbortController(); controller = abort;
-    const timer = setTimeout(() => abort.abort(), 12_000);
+    const timer = setTimeout(() => abort.abort(), HOMOLOGACION_UI_MS);
     update({ checking: true, checkError: "", report: null });
     try {
       const response = await dependencies.request("/api/credentials/check", {

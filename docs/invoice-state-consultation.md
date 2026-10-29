@@ -27,7 +27,7 @@ The issued-invoice list and its PDF links remain separate and unchanged. A consu
 - Only `FECompConsultar` is used, against fixed homologation endpoints. It never calls issuance, last-number allocation, batch emission, approval or the recovery sweeper. In particular, **do not use `recoverStuckEmissions` for this investigation**: that path attempts issuance first.
 - The only possible persistence is the existing certificate/endpoint/service-scoped WSAA ticket cache. Invoice, reservation and audit rows are not changed by this action.
 - The server rechecks the reservation and certificate after asynchronous work, including before WSFE after WSAA. Results for changed identities are discarded. Client requests have stale-result/double-click guards and a 15-second cooldown; server attempts share a bounded short-lived in-flight/result cache.
-- HTTP calls have a four-second deadline, an overall ten-second deadline, a 1 MiB response cap and no redirects. SOAP parsing rejects malformed XML, DTD/entities, missing result/detail/header and ambiguous repeated shapes. Provider text, tokens, signatures, keys and PEMs are not exposed or logged.
+- HTTP calls have a twenty-five-second deadline, an overall sixty-five-second deadline, a 1 MiB response cap and no redirects. SOAP parsing rejects malformed XML, DTD/entities, missing result/detail/header and ambiguous repeated shapes. Provider text, tokens, signatures, keys and PEMs are not exposed or logged.
 
 ## Protocol fix and limits
 

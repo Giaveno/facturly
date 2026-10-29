@@ -219,7 +219,7 @@ export interface WsaaClientOptions {
   /** Injectable uniqueId provider (default: monotonic counter). */
   uniqueIdProvider?: () => string;
   /**
-   * TRA (Login Ticket Request) validity window in MINUTES (default 5). The TRA
+   * TRA (Login Ticket Request) validity window in MINUTES (default 10). The TRA
    * window is minutes — NOT the 12h TA lifetime ARCA returns in the ticket.
    */
   traTtlMinutes?: number;
@@ -228,7 +228,7 @@ export interface WsaaClientOptions {
 }
 
 /** Default TRA validity window (minutes). */
-export const DEFAULT_TRA_TTL_MINUTES = 5;
+export const DEFAULT_TRA_TTL_MINUTES = 10;
 
 // WSAA specifies xsd:unsignedInt, not an arbitrary integer. Epoch seconds fit
 // the 32-bit range; milliseconds do not. Advance for repeated calls, wrapping
@@ -272,7 +272,7 @@ export class WsaaClient {
   async loginCms(service: string): Promise<WsaaTa> {
     const started = Date.now();
     const now = this.clock();
-    const generationTime = formatWsaaTime(now);
+    const generationTime = formatWsaaTime(new Date(now.getTime() - 10 * 60 * 1000));
     const expiration = new Date(
       now.getTime() + this.traTtlMinutes * 60 * 1000,
     );

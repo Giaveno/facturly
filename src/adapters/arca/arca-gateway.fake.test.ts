@@ -10,7 +10,7 @@ const req: FECAEReq = {
   cuit: "20123456786",
   ptoVta: 1,
   cbteTipo: 1,
-  cbteNro: 7,
+  cbteNro: 1,
   receptorDocTipo: 80,
   receptorDocNro: 30710145764,
   condicionIvaReceptorId: 6, // monotributista (RG 5616)
@@ -42,35 +42,35 @@ describe("arca-gateway.fake — deterministic, offline", () => {
 
   it("honors the CALLER-PINNED cbteNro (never assigns its own number)", async () => {
     const fake = new ArcaGatewayFake();
-    const result = await fake.issueInvoice({ ...req, cbteNro: 7 });
-    expect(result.cbteNro).toBe(7);
+    const result = await fake.issueInvoice({ ...req, cbteNro: 1 });
+    expect(result.cbteNro).toBe(1);
     // Deterministic CAE: CAE_BASE + cbteNro, zero-padded to 14 digits.
-    expect(result.cae).toBe(String(CAE_BASE + 7).padStart(14, "0"));
+    expect(result.cae).toBe(String(CAE_BASE + 1).padStart(14, "0"));
     expect(result.cae).toHaveLength(14);
   });
 
   it("returns the SAME prior CAE on a duplicate (models 10015/10016 → FECompConsultar)", async () => {
     const fake = new ArcaGatewayFake();
-    const first = await fake.issueInvoice({ ...req, cbteNro: 7 });
-    const dup = await fake.issueInvoice({ ...req, cbteNro: 7 });
+    const first = await fake.issueInvoice({ ...req, cbteNro: 1 });
+    const dup = await fake.issueInvoice({ ...req, cbteNro: 1 });
     expect(dup.cae).toBe(first.cae);
-    expect(dup.cbteNro).toBe(7);
+    expect(dup.cbteNro).toBe(1);
   });
 
   it("issues DISTINCT numbers (as the caller would) to distinct CAEs", async () => {
     const fake = new ArcaGatewayFake();
-    const first = await fake.issueInvoice({ ...req, cbteNro: 7 });
-    const second = await fake.issueInvoice({ ...req, cbteNro: 8 });
+    const first = await fake.issueInvoice({ ...req, cbteNro: 1 });
+    const second = await fake.issueInvoice({ ...req, cbteNro: 2 });
     expect(first.cae).not.toBe(second.cae);
-    expect(first.cbteNro).toBe(7);
-    expect(second.cbteNro).toBe(8);
+    expect(first.cbteNro).toBe(1);
+    expect(second.cbteNro).toBe(2);
   });
 
   it("ultimoAutorizado returns 0 when nothing issued, then the last issued number", async () => {
     const fake = new ArcaGatewayFake();
     expect(await fake.ultimoAutorizado("20123456786", 1, 1)).toBe(0);
-    await fake.issueInvoice({ ...req, cbteNro: 7 });
-    expect(await fake.ultimoAutorizado("20123456786", 1, 1)).toBe(7);
+    await fake.issueInvoice({ ...req, cbteNro: 1 });
+    expect(await fake.ultimoAutorizado("20123456786", 1, 1)).toBe(1);
     // A different key is independent.
     expect(await fake.ultimoAutorizado("20123456786", 1, 6)).toBe(0);
   });
@@ -92,4 +92,8 @@ describe("arca-gateway.fake — deterministic, offline", () => {
     const result = await fake.issueInvoice({ ...req, cbteNro: 1 });
     expect(result.cbteNro).toBe(1);
   });
+});
+
+it("rejects a fresh numbering gap rather than authorizing it", async()=>{
+ const fake=new ArcaGatewayFake();await expect(fake.issueInvoice({...req,cbteNro:2})).rejects.toThrow(/strict|sequence/i);
 });

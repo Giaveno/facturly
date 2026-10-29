@@ -109,6 +109,27 @@ function makeGateway() {
 }
 
 describe("arca-gateway.prod — composed ARCA gateway", () => {
+  it("revalidates dispatch ownership after delayed TA acquisition and sends nothing if expired", async () => {
+    const events: string[] = [];
+    let leaseValid = true;
+    let sends = 0;
+    const gateway = new ArcaGatewayProd({
+      taCache: {
+        async get() { events.push("ta"); leaseValid = false; return TA; },
+        async evict() {},
+      },
+      wsfe: new WsfeClient({ url: "offline", transport: { async post() { sends++; throw Error("must not send"); } } }),
+      padron: new PadronA5Client({ url: "offline", transport: padronTransport().transport }),
+      emissionsEnabled: true,
+    });
+    const beforeDispatch = async () => {
+      events.push("guard");
+      if (!leaseValid) throw Error("Dispatch claim expired");
+    };
+    await expect(gateway.issueInvoice(REQ, beforeDispatch)).rejects.toThrow("Dispatch claim expired");
+    expect(events).toEqual(["ta", "guard"]);
+    expect(sends).toBe(0);
+  });
   it.each(["600", "10016", "10015"])("retains Errors-only %s taxonomy without inventing rejection or duplicate evidence", async code => {
     const base = wsfeTransport(); let issued = 0; let consulted = 0;
     const transport: WsfeTransport = { async post(url, body, headers) {
@@ -118,9 +139,10 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
       return base.transport.post(url,body,headers);
     } };
     const gateway = new ArcaGatewayProd({ taCache: new TaCache({ wsaa: fakeWsaa().wsaa, store: inMemoryStore(), clock: () => FIXED_NOW }), wsfe: new WsfeClient({ url: "offline", transport }), padron: new PadronA5Client({ url: "offline", transport: padronTransport().transport }), emissionsEnabled: true });
-    if (code === "10015") await expect(gateway.issueInvoice(REQ)).rejects.toMatchObject({ kind:"business", code:"10015", category:"provider-errors" });
+    if (code === "600") await expect(gateway.issueInvoice(REQ)).rejects.toMatchObject({kind:"auth",code:"600"});
+    else if (code === "10015") await expect(gateway.issueInvoice(REQ)).rejects.toMatchObject({ kind:"business", code:"10015", category:"provider-errors" });
     else expect(await gateway.issueInvoice(REQ)).toMatchObject({cae:expect.stringMatching(/^\d{14}$/),cbteNro:7});
-    expect(issued).toBe(code === "600" ? 2 : 1); expect(consulted).toBe(code === "10016" ? 1 : 0);
+    expect(issued).toBe(1); expect(consulted).toBe(code === "10016" ? 1 : 0);
   });
   it("holds malformed consulted fiscal evidence as terminal uncertain, not a transient emission error", async () => {
     const transport: WsfeTransport = { async post(_url,body) { return body.includes("<ar:FECompConsultar>") ? "<Envelope/>" : `<Envelope><Body><FECAESolicitarResponse><FECAESolicitarResult><Errors><Err><Code>10016</Code></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></Body></Envelope>`; } };
@@ -310,7 +332,7 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
     expect(ops).toEqual(["solicitar", "consultarComprobante"]);
   });
 
-  it("evicts the TA and retries ONCE with a fresh TA on an auth rejection (W5)", async () => {
+  it("never retries issuance or refreshes TA after an auth rejection", async () => {
     // First TA is rejected with ARCA auth code 600 (invalid token); the gateway
     // must evict it, obtain a FRESH TA, and retry once.
     let loginCount = 0;
@@ -341,12 +363,10 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
       emissionsEnabled: true,
       metrics,
     });
-    const result = await gateway.issueInvoice(REQ);
-    expect(result.cae).toBe("70212345678901");
-    expect(result.cbteNro).toBe(7);
-    expect(solicitarCount).toBe(2); // retried exactly once
-    expect(loginCount).toBe(2); // a fresh TA was obtained after eviction
-    expect(metrics.snapshot().ta_evicted_auth).toBe(1);
+    await expect(gateway.issueInvoice(REQ)).rejects.toMatchObject({kind:"auth",code:"600"});
+    expect(solicitarCount).toBe(1);
+    expect(loginCount).toBe(1);
+    expect(metrics.snapshot().ta_evicted_auth).toBeUndefined();
   });
 
   it("throws on a non-duplicate ARCA rejection (no silent CAE)", async () => {
@@ -447,4 +467,13 @@ describe("arca-gateway.prod — factory", () => {
     expect(fp).not.toBe(certFingerprint("cert-b"));
     expect(fp).toHaveLength(16);
   });
+});
+it("rechecks dispatch ownership after a delayed TA acquisition before any issuance POST",async()=>{
+ let release!:(ta:{token:string;sign:string;expirationTime:string})=>void;
+ const ticket=new Promise<{token:string;sign:string;expirationTime:string}>(resolve=>{release=resolve;});
+ let expired=false,sends=0;
+ const gateway=new ArcaGatewayProd({taCache:{get:async()=>ticket,evict:async()=>{}},wsfe:new WsfeClient({url:"offline",transport:{post:async()=>{sends++;throw Error("must not send");}}}),padron:new PadronA5Client({url:"offline",transport:padronTransport().transport}),emissionsEnabled:true});
+ const pending=gateway.issueInvoice(REQ,async()=>{if(expired)throw Error("lease expired after TA");});
+ expired=true;release({token:"fake",sign:"fake",expirationTime:"2099-01-01T00:00:00Z"});
+ await expect(pending).rejects.toThrow("lease expired after TA");expect(sends).toBe(0);
 });

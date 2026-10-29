@@ -84,3 +84,12 @@ it("also releases an identity when a cache write never settles", async () => {
   await vi.advanceTimersByTimeAsync(8100); await expired;
   expect((await cache.get("wsfe")).token).toBe("token"); expect(post).toHaveBeenCalledTimes(2);
 });
+it("grants the official homologacion identity 30s rather than the production 8s acquisition deadline",async()=>{
+ const {WSAA_HOMOLOGACION_URL}=await import("./constants");
+ const credentials=generateSelfSignedCert("HOMO-SLOW");vi.useFakeTimers();
+ const cache=createCredentialTaCache({credentials,url:WSAA_HOMOLOGACION_URL,transport:{post:vi.fn()},store:{get:async()=>new Promise(()=>{}),put:async()=>{}}});
+ let finished=false;
+ const pending=cache.get("wsfe").catch(error=>{finished=true;return error;});
+ await vi.advanceTimersByTimeAsync(8100);expect(finished).toBe(false);
+ await vi.advanceTimersByTimeAsync(22000);expect(await pending).toMatchObject({diagnostic:{stage:"wsaa",category:"timeout"}});
+});

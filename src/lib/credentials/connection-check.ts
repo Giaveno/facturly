@@ -1,3 +1,4 @@
+import { HOMOLOGACION_CALL_MS, HOMOLOGACION_QUERY_MS } from "@/adapters/arca/timeouts";
 import { ARCA_SERVICE_PADRON, ARCA_SERVICE_WSFE, WSAA_HOMOLOGACION_URL } from "@/adapters/arca/constants";
 import { createCredentialTaCache } from "@/adapters/arca/credential-ta-cache";
 import { createFetchTransport } from "@/adapters/arca/http";
@@ -19,8 +20,8 @@ export class ConnectionCheckError extends Error {
   constructor(readonly code: "environment" | "changed" | "timeout") { super(code); }
 }
 const SERVICES = [ARCA_SERVICE_WSFE, ARCA_SERVICE_PADRON] as const;
-const CALL_MS = 4_000;
-const TOTAL_MS = 10_000;
+const CALL_MS = HOMOLOGACION_CALL_MS;
+const TOTAL_MS = HOMOLOGACION_QUERY_MS;
 const COOLDOWN_MS = 15_000;
 interface Attempt { fingerprint: string; at: number; validUntil: () => number; promise: Promise<ConnectionReport> }
 interface CheckState { attempt?: Attempt }

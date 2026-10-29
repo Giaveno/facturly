@@ -12,8 +12,8 @@ values are refused before accessing the database or network. No request-selected
 URL, service, certificate or private key is accepted. The server decrypts the
 persisted private key just in time and authenticates `wsfe` and
 `ws_sr_constancia_inscripcion` through the fixed homologation WSAA endpoint.
-Redirects are rejected. Each remote call has a 4-second timeout; the whole check
-has a 10-second budget (including persistence). Responses are `no-store` and
+Redirects are rejected. Each remote call has a 25-second timeout; the whole check
+has a 65-second budget (including persistence). Responses are `no-store` and
 contain only public certificate metadata and `ok`, `failure`, `timeout` or
 `not_configured` service statuses, never tickets, keys, remote payloads or stacks.
 

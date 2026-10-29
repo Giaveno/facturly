@@ -1,3 +1,4 @@
+import { HOMOLOGACION_UI_MS } from "@/adapters/arca/timeouts";
 import type { PointOfSaleClient, PointsOfSaleReport } from "@/lib/clients/points-of-sale";
 import { safeQueryDiagnostic } from "@/adapters/arca/query-diagnostics";
 
@@ -45,7 +46,7 @@ export function createPointsOfSaleWorkflow(client: PointOfSaleClient, fingerprin
       if (state.checking) return;
       const current = ++version;
       const abort = new AbortController(); controller = abort;
-      const timer = setTimeout(() => abort.abort(), 12_000);
+      const timer = setTimeout(() => abort.abort(), HOMOLOGACION_UI_MS);
       const cancelled = new Promise<never>((_, reject) => abort.signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
       let errorMessage = "No se pudo completar la consulta por un fallo de red. No se verificó el punto configurado.";
       update({ checking: true, error: "", report: null });

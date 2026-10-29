@@ -25,7 +25,16 @@ export interface HttpTransport {
 /** Per-call timeout budget for an outbound ARCA call. */
 export const DEFAULT_TIMEOUT_MS = 20_000;
 
+/** Bounded diagnostic values only: no arbitrary response headers or body text. */
+export interface SoapResponseMetadata {
+  httpStatus: number;
+  mediaType: "text/xml" | "application/soap+xml" | "application/xml" | "text/html" | "text/plain" | "other";
+  shape: "html" | "xml" | "empty" | "other";
+}
+
 export interface FetchTransportOptions {
+  /** Diagnostic hook receives XML in memory only; use createHomologacionCapture. */
+  capture?: (direction: "request" | "response", url: string, xml: string, metadata?: SoapResponseMetadata) => void;
   /** Per-call timeout in milliseconds (default 20s). */
   timeoutMs?: number;
   logger?: ArcaLogger;
@@ -64,6 +73,8 @@ export function createFetchTransport(options: FetchTransportOptions = {}): HttpT
 
   return {
     async post(url, body, headers) {
+      // Capture before faults/status discard the body; never enable raw logging.
+      options.capture?.("request", url, body);
       let res: Response;
       try {
         res = await fetchFn(url, {
@@ -108,9 +119,17 @@ export function createFetchTransport(options: FetchTransportOptions = {}): HttpT
         });
       }
 
+      const contentType = res.headers.get("content-type")?.split(";",1)[0]?.trim().toLowerCase();
+      const allowedMediaTypes = ["text/xml", "application/soap+xml", "application/xml", "text/html", "text/plain"] as const;
+      const mediaType: SoapResponseMetadata["mediaType"] = allowedMediaTypes.find(type=>type===contentType) ?? "other";
+      const shape: SoapResponseMetadata["shape"] = !text.trim() ? "empty" : /^(?:\s*<!doctype\s+html[^>]*>)?\s*<html\b/i.test(text) ? "html" : text.trimStart().startsWith("<") ? "xml" : "other";
+      // The homologacion redactor emits an omission marker for unsafe XML. Keep
+      // safe evidence even when the response cannot be parsed, never a raw fallback.
+      options.capture?.("response", url, text, {httpStatus:res.status,mediaType,shape});
       if (text.length > 1_048_576 || /<!DOCTYPE|<!ENTITY/i.test(text)) {
         throw new ArcaBusinessError("ARCA response rejected", {
           category: text.length > 1_048_576 ? "response-too-large" : "malformed-response",
+          httpStatus: res.status,
         });
       }
       // A SOAP Fault can arrive as HTTP 500 (most common) OR HTTP 200.

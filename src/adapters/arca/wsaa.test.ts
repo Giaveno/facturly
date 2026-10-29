@@ -181,7 +181,7 @@ describe("wsaa — WsaaClient.loginCms", () => {
     expect(body).toContain("<wsaa:in0>");
   });
 
-  it("uses a unique, monotonic uniqueId and a ~5 minute TRA window", async () => {
+  it("uses a unique, monotonic uniqueId and a clock-skew tolerant TRA window (now -10 / +10 minutes)", async () => {
     const { transport, bodies } = makeTransport();
     const fixedNow = new Date("2026-09-22T15:30:00.000Z");
     let uniqueCounter = 0;
@@ -196,7 +196,7 @@ describe("wsaa — WsaaClient.loginCms", () => {
     await client.loginCms("wsfe");
     expect(uniqueCounter).toBe(2);
 
-    // The TRA window must be MINUTES (default 5), NOT the 12h TA lifetime:
+    // The TRA window is minutes, not the 12h TA lifetime:
     // inspect the emitted generationTime → expirationTime delta.
     const body = bodies[0]!;
     const cms = /<wsaa:in0>([^<]+)<\/wsaa:in0>/.exec(body)![1]!;
@@ -205,8 +205,9 @@ describe("wsaa — WsaaClient.loginCms", () => {
     const exp = /<expirationTime>([^<]+)<\/expirationTime>/.exec(traXml)![1]!;
     const genMs = Date.parse(gen);
     const expMs = Date.parse(exp);
-    // 5 minutes = 300_000 ms.
-    expect(expMs - genMs).toBe(5 * 60 * 1000);
+    // Both instants are checked independently against the injected clock.
+    expect(genMs).toBe(fixedNow.getTime() - 10 * 60 * 1000);
+    expect(expMs).toBe(fixedNow.getTime() + 10 * 60 * 1000);
   });
 
   it("defaultUniqueId is monotonic across repeated calls", async () => {

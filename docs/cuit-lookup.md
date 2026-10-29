@@ -18,7 +18,7 @@ The **Consulta de CUIT** page performs an authenticated, read-only Padrón looku
 
 ## Bounds and limitations
 
-Incoming JSON is limited to 1 KiB/2 seconds. Provider responses are limited to 1 MiB/4 seconds per call and the lookup to 10 seconds total. The browser has an independent 13-second deadline. Input/credential changes and unmount cancel the view and discard late results; credentials are rechecked before returning a server result.
+Incoming JSON is limited to 1 KiB/2 seconds. Provider responses are limited to 1 MiB/25 seconds per call and the lookup to 65 seconds total. The browser has an independent 70-second deadline. Input/credential changes and unmount cancel the view and discard late results; credentials are rechecked before returning a server result.
 
 An in-process, bounded attempt map deduplicates the same query and applies a 15-second credential-wide cooldown to different CUITs. Results cannot outlive their certificate or TA. This is not a distributed rate limiter: separate server processes have separate cooldowns. Shared TA acquisition remains single-flight within one process.
 

@@ -36,6 +36,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  unique,
   uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -237,19 +238,9 @@ export const invoices = pgTable(
 );
 
 /**
- * Issued invoices — the idempotency guard. ARCA's canonical duplicate signal is
- * error 10015/10016 on an already-issued (cuit, ptoVta, cbteTipo, cbteNro).
- * This unique index makes a re-emit physically impossible: the DB rejects a
- * second row with the same key before ARCA is ever contacted.
- *
- * RESERVATION PATTERN (slice 4): the emission job inserts the row with the
- * intended `cbteNro` BEFORE calling ARCA, so the unique index pins the number
- * and a concurrent/duplicate attempt is rejected at the DB. At that moment the
- * CAE does not exist yet, so `cae`/`caeFchVto` are NULLABLE — a NULL CAE marks a
- * reservation that is still awaiting ARCA (or stuck in EMIT_ERROR). The CAE is
- * written onto the SAME row after `FECAESolicitar` returns. A retry replays the
- * pinned `cbteNro` (never re-derives it) so ARCA returns 10015/10016 and the
- * CAE is recovered via FECompConsultar.
+ * Durable fiscal reservations. NULL CAE remains a blocker until reconciled.
+ * Environment provenance is nullable only for unknown legacy records (fail closed).
+ * Uniqueness pins identity; emission_series_claims additionally serializes dispatch.
  */
 export const issuedInvoices = pgTable(
   "issued_invoices",
@@ -258,12 +249,13 @@ export const issuedInvoices = pgTable(
     invoiceId: uuid("invoice_id")
       .notNull()
       .references(() => invoices.id),
+    environment: text("environment").$type<"production" | "homologacion">(),
     cuit: text("cuit").notNull(),
     ptoVta: integer("pto_vta").notNull(),
     cbteTipo: integer("cbte_tipo").notNull(),
     cbteNro: bigint("cbte_nro", { mode: "number" }).notNull(),
     // Nullable: a reservation row (emission in flight or EMIT_ERROR) has no CAE
-    // yet. The unique idempotency index is what prevents a duplicate emission.
+    // yet. Dispatch additionally requires the durable series claim.
     cae: text("cae"),
     caeFchVto: date("cae_fch_vto"),
     // Every other money column carries the `_centavos` suffix; this one must too.
@@ -274,14 +266,15 @@ export const issuedInvoices = pgTable(
   },
   (table) => [
     // ARCA's canonical duplicate signal is (cuit, ptoVta, cbteTipo, cbteNro).
-    // This unique index makes a re-emit of the SAME NUMBER physically
-    // impossible (the DB rejects a second row before ARCA is contacted).
-    uniqueIndex("issued_invoices_idempotency").on(
+    // This constraint pins local identity; it does not serialize network dispatch.
+    unique("issued_invoices_idempotency").on(
+      table.environment,
       table.cuit,
       table.ptoVta,
       table.cbteTipo,
       table.cbteNro,
-    ),
+    ).nullsNotDistinct(),
+    check("issued_invoices_environment_check", sql`${table.environment} IN ('homologacion', 'production')`),
     // The fiscal identity of an emission is the INVOICE row, not the number.
     // One invoice can have AT MOST one reservation regardless of which number
     // the (concurrent) allocator picked — this is the real guard against a
@@ -366,4 +359,18 @@ export const receiptCleanup = pgTable("receipt_cleanup", {
   storageKey: text("storage_key").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),
+});
+
+/** Durable series claim: lease expiry is evidence of uncertainty, never takeover permission. */
+export const emissionSeriesClaims = pgTable("emission_series_claims", {
+  seriesKey: text("series_key").primaryKey(),
+  owner: text("owner"),
+  leaseExpiresAtMs: bigint("lease_expires_at_ms", { mode: "number" }).notNull(),
+  uncertain: boolean("uncertain").notNull().default(false),
+});
+/** Permanent one-shot marker; no automatic retry or marker deletion is supported. */
+export const diagnosticIssuance = pgTable("diagnostic_issuance", {
+  tupleKey: text("tuple_key").primaryKey(),
+  authorizationHash: text("authorization_hash").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });

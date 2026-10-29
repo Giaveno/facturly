@@ -1,3 +1,4 @@
+import { HOMOLOGACION_CALL_MS, HOMOLOGACION_QUERY_MS } from "@/adapters/arca/timeouts";
 import { createHash } from "node:crypto";
 import { eq, isNull } from "drizzle-orm";
 import { ARCA_SERVICE_WSFE, WSAA_HOMOLOGACION_URL, WSFE_HOMOLOGACION_URL } from "@/adapters/arca/constants";
@@ -131,7 +132,7 @@ export function createInvoiceConsultation({ env, repository, getReservation, sto
         if (env.ARCA_ENV !== "homologacion")
             throw new InvoiceConsultationError("environment");
         let stage: QueryStage | undefined;
-        return bounded(10000, async (signal) => {
+        return bounded(HOMOLOGACION_QUERY_MS, async (signal) => {
             const row = await getReservation(invoiceId);
             signal.throwIfAborted();
             if (!row || row.cae !== null)
@@ -169,7 +170,7 @@ export function createInvoiceConsultation({ env, repository, getReservation, sto
                 current.promise = (async () => {
                     const transport = { post: async (url: string, body: string, headers: Record<string, string>) => {
                             const callStage: QueryStage = url === WSAA_HOMOLOGACION_URL ? "wsaa" : "wsfe";
-                            return bounded(4000, async (callSignal) => {
+                            return bounded(HOMOLOGACION_CALL_MS, async (callSignal) => {
                                 if (url !== WSAA_HOMOLOGACION_URL && url !== WSFE_HOMOLOGACION_URL)
                                     throw new ArcaQueryError(callStage, "internal");
                                 // The outer signal is checked before and after each awaited operation.

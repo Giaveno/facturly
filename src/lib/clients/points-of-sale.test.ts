@@ -121,7 +121,7 @@ describe("stored client homologation point-of-sale query", () => {
     await expect(bad.check("client", bad.fingerprint)).rejects.toMatchObject({ diagnostic: { stage: "wsfe", category: "malformed-response" } });
     vi.useFakeTimers(); const hung = setup(); hung.fetchFn.mockImplementation(() => new Promise(() => {}));
     const pending = expect(hung.check("client", hung.fingerprint)).rejects.toMatchObject({ code: "timeout", diagnostic: { stage: "wsfe", category: "timeout" } });
-    await vi.advanceTimersByTimeAsync(4100); await pending;
+    await vi.advanceTimersByTimeAsync(25100); await pending;
   });
   it("classifies malformed WSAA responses without confusing a cache failure with provider data", async () => {
     const malformed = setup(); malformed.entries.clear(); malformed.fetchFn.mockResolvedValue(new Response("<broken>"));
@@ -132,7 +132,7 @@ describe("stored client homologation point-of-sale query", () => {
   it("preserves the independent WSAA acquisition timeout category", async () => {
     vi.useFakeTimers(); const s = setup(); s.store.get.mockImplementation(() => new Promise(() => {}));
     const pending = expect(s.check("client", s.fingerprint)).rejects.toMatchObject({ code: "timeout", diagnostic: { stage: "wsaa", category: "timeout" } });
-    await vi.advanceTimersByTimeAsync(8100); await pending;
+    await vi.advanceTimersByTimeAsync(30100); await pending;
   });
   it("bounds response size before parsing", async () => {
     const s = setup(); s.fetchFn.mockResolvedValue(new Response("x".repeat(1_048_577)));
@@ -141,12 +141,12 @@ describe("stored client homologation point-of-sale query", () => {
   it("bounds hung network and response-body reads", async () => {
     vi.useFakeTimers(); const s = setup(); s.fetchFn.mockImplementation(async () => new Response(new ReadableStream({ start() {} })));
     const pending = expect(s.check("client", s.fingerprint)).rejects.toMatchObject({ code: "timeout" });
-    await vi.advanceTimersByTimeAsync(4100); await pending;
+    await vi.advanceTimersByTimeAsync(25100); await pending;
   });
   it("bounds total operation even if persistence ignores abort", async () => {
     vi.useFakeTimers(); const s = setup(); s.getClient.mockImplementation(() => new Promise(() => {}));
     const pending = expect(s.check("client", s.fingerprint)).rejects.toMatchObject({ code: "timeout" });
-    await vi.advanceTimersByTimeAsync(10100); await pending; expect(s.fetchFn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(65100); await pending; expect(s.fetchFn).not.toHaveBeenCalled();
   });
   it("does not return successful results after the ticket expires in flight", async () => {
     vi.useFakeTimers(); const s = setup(); s.entries.set(`${WSAA_HOMOLOGACION_URL}:${s.fingerprint}:wsfe`, { token: "T", sign: "S", issuedAt: Date.now(), expiresAt: Date.now() + 1000 });

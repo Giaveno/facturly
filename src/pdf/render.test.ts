@@ -52,7 +52,7 @@ describe("invoice PDF — RG 4892 QR + CAE + due date + Ley 27.618 legend", () =
       ptoVta: 1,
       tipoCmp: 1,
       nroCmp: 7,
-      importe: 121000,
+      importe: 1210,
       moneda: "PES",
       ctz: 1,
       tipoDocRec: 80,
@@ -65,7 +65,7 @@ describe("invoice PDF — RG 4892 QR + CAE + due date + Ley 27.618 legend", () =
   it("buildInvoiceQrData carries the CAE and due date in the payload", () => {
     const data = buildInvoiceQrData(base);
     expect(String(data.codAut)).toBe(base.cae);
-    expect(data.importe).toBe(base.importeTotal);
+    expect(data.importe).toBe(base.importeTotal / 100);
   });
 
   it("includes the Ley 27.618 legend only for RI → Monotributista", () => {
@@ -121,4 +121,13 @@ describe("invoice PDF — RG 4892 QR + CAE + due date + Ley 27.618 legend", () =
     expect(bytes.subarray(0, 5).toString("ascii")).toBe("%PDF-");
     expect(bytes.toString("ascii")).toContain("%%EOF");
   });
+});
+
+it("serializes QR currency units with cent precision, never centavos", () => {
+  for (const [cents, pesos] of [[625000, 6250], [625001, 6250.01]]) {
+    const data = decodeQrPayload(buildInvoiceQrUrl({ ...base, importeTotal: cents! }).slice(QR_BASE_URL.length));
+    expect(data.importe).toBe(pesos);
+    expect(data.nroCmp).toBe(base.cbteNro);
+    expect(String(data.codAut)).toBe(base.cae);
+  }
 });

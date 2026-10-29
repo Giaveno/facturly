@@ -9,6 +9,8 @@ import {
   DEFAULT_TIMEOUT_MS,
   parseRetryAfterMs,
 } from "./http";
+import { createHomologacionCapture } from "./soap-diagnostics";
+import { WSFE_HOMOLOGACION_URL } from "./constants";
 
 /** A minimal Response-shaped object with a configurable body/text behavior. */
 function response(
@@ -45,6 +47,21 @@ describe("http — parseRetryAfterMs", () => {
 });
 
 describe("http — createFetchTransport", () => {
+  it.each([200, 500])("keeps rejected HTML/DTD response evidence safely visible in homologacion (HTTP %s)", async status => {
+    const output: string[] = [];
+    const capture = createHomologacionCapture({environment:"homologacion",enabled:true,secrets:()=>["OFFLINE_SECRET"],write:text=>output.push(text)});
+    // Native Response/body handling, unlike the minimal Response-shaped mocks below.
+    const transport = createFetchTransport({capture,fetchFn:async()=>new Response('<!DOCTYPE html><html><body>OFFLINE_SECRET</body></html>', {status,headers:{"content-type":"text/html; charset=utf-8"}})});
+    const error = await transport.post(WSFE_HOMOLOGACION_URL,"<Envelope/>",{}).catch(error=>error);
+    expect(error).toMatchObject({category:"malformed-response",httpStatus:status});
+    expect(output).toHaveLength(2);
+    expect(output[1]).toContain("[SOAP omitted: unsafe XML]");
+    expect(output[1]).toContain(`"httpStatus":${status}`);
+    expect(output[1]).toContain('"mediaType":"text/html"');
+    expect(output[1]).toContain('"shape":"html"');
+    expect(output.join("\n")).not.toContain("OFFLINE_SECRET");
+    expect(output.join("\n")).not.toContain("<!DOCTYPE");
+  });
   it("returns the text body on a 200", async () => {
     const t = transportWith(200, "<ok/>");
     await expect(t.post("https://x", "", {})).resolves.toBe("<ok/>");

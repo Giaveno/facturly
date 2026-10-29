@@ -1,3 +1,5 @@
+import { WSAA_HOMOLOGACION_URL } from "./constants";
+import { arcaTimeouts } from "./timeouts";
 import { X509Certificate } from "node:crypto";
 import { TaCache, type TaCacheOptions } from "./ta-cache";
 import { WsaaClient, type WsaaClientOptions, type WsaaTa } from "./wsaa";
@@ -6,7 +8,7 @@ import { ArcaQueryError } from "./query-diagnostics";
 // Independent per-request cache instances still represent the same WSAA identity.
 // Share only active refreshes/reads, never retain a resolved ticket in process memory.
 const pendingTickets = new Map<string, Promise<WsaaTa>>();
-const ACQUISITION_MS = 8_000;
+
 
 /** Public SHA-256 identity, independent of PEM whitespace/line endings. */
 export function certificateFingerprint(certPem: string): string {
@@ -52,7 +54,7 @@ export function createCredentialTaCache(options: Options): Pick<TaCache, "get" |
       const assertActive = () => { if (!active) throw new ArcaQueryError("wsaa", "timeout"); };
       let timer: ReturnType<typeof setTimeout>;
       const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => { active = false; reject(new ArcaQueryError("wsaa", "timeout")); }, ACQUISITION_MS);
+        timer = setTimeout(() => { active = false; reject(new ArcaQueryError("wsaa", "timeout")); }, arcaTimeouts(options.url === WSAA_HOMOLOGACION_URL ? "homologacion" : "production").acquisitionMs);
       });
       // A new cache per bounded acquisition also avoids its instance-local stuck inflight map.
       const request = Promise.race([cacheFor(credentials, scope, assertActive).get(service), timeout]);

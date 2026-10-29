@@ -1,3 +1,4 @@
+import { parseDummyResponse, parseTiposCbteResponse } from "./wsfe-diagnostics";
 /**
  * WSFEv1 SOAP client — `FECAESolicitar` (emission), `FECompConsultar` (the
  * idempotency re-fetch path), and `FECompUltimoAutorizado` (next comprobante
@@ -246,9 +247,9 @@ export function buildFecaesolicitarEnvelope(
     "<ar:ImpTotConc>0.00</ar:ImpTotConc>" +
     `<ar:ImpNeto>${formatCentavos(req.impNetoCentavos)}</ar:ImpNeto>` +
     "<ar:ImpOpEx>0.00</ar:ImpOpEx>" +
-    `<ar:ImpIVA>${formatCentavos(req.impIvaCentavos)}</ar:ImpIVA>` +
     "<ar:ImpTrib>0.00</ar:ImpTrib>" +
-    `<ar:FchVtoPago>${formatDateYyyyMmDd(req.fchVtoPago)}</ar:FchVtoPago>` +
+    `<ar:ImpIVA>${formatCentavos(req.impIvaCentavos)}</ar:ImpIVA>` +
+    (req.concepto === 1 ? "" : `<ar:FchVtoPago>${formatDateYyyyMmDd(req.fchVtoPago)}</ar:FchVtoPago>`) +
     `<ar:MonId>${escapeXml(validateMonId(req.monId))}</ar:MonId>` +
     `<ar:MonCotiz>${req.monCotiz}</ar:MonCotiz>` +
     `<ar:CondicionIVAReceptorId>${req.condicionIvaReceptorId}</ar:CondicionIVAReceptorId>` +
@@ -428,6 +429,15 @@ export class WsfeClient {
   constructor(options: WsfeClientOptions) {
     this.url = options.url;
     this.transport = options.transport;
+  }
+
+  async dummy() {
+    return parseDummyResponse(await this.transport.post(this.url, envelope("<ar:FEDummy/>"), { ...SOAP_HEADERS, SOAPAction: `"${NAMESPACE}FEDummy"` }));
+  }
+
+  async getTiposCbte(auth: WsfeAuth) {
+    const body = envelope("<ar:FEParamGetTiposCbte>" + authBlock(auth) + "</ar:FEParamGetTiposCbte>");
+    return parseTiposCbteResponse(await this.transport.post(this.url, body, { ...SOAP_HEADERS, SOAPAction: `"${NAMESPACE}FEParamGetTiposCbte"` }));
   }
 
   async getPointsOfSale(auth: WsfeAuth): Promise<PointOfSale[]> {

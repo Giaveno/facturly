@@ -55,7 +55,7 @@ it("survives React Strict Mode effect cleanup and reactivation", async () => {
 it.each(["fetch", "body"])('bounds stalled %s independently of fetch abort support and ignores late results', async stage => {
   vi.useFakeTimers(); let release!: (value: Response) => void;
   const fetchFn = stage === "fetch" ? vi.fn<typeof fetch>(() => new Promise(resolve => { release = resolve; })) : vi.fn<typeof fetch>(async () => new Response(new ReadableStream({ start() {} })));
-  const s = setup(fetchFn); const pending = s.workflow.check(); await vi.advanceTimersByTimeAsync(13100); await pending;
+  const s = setup(fetchFn); const pending = s.workflow.check(); await vi.advanceTimersByTimeAsync(70100); await pending;
   expect(s.state.checking).toBe(false); expect(s.state.report).toBeNull(); expect(s.state.error).toContain("tiempo de espera");
   if (stage === "fetch") { release(Response.json(report)); await Promise.resolve(); expect(s.state.report).toBeNull(); }
 });

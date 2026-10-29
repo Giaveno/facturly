@@ -97,7 +97,7 @@ describe("homologation-only CUIT lookup", () => {
     await expect(s.lookup(target, s.fingerprint)).rejects.toMatchObject({ diagnostic: { stage: "wsaa" } });
     const hung = setup(); const cancel = vi.fn(); hung.fetchFn.mockImplementation(async () => new Response(new ReadableStream({ start() {}, cancel })));
     const pending = expect(hung.lookup(target, hung.fingerprint)).rejects.toMatchObject({ code: "timeout", diagnostic: { stage: "padron", category: "timeout" } });
-    await vi.advanceTimersByTimeAsync(4100); await pending; expect(cancel).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(25100); await pending; expect(cancel).toHaveBeenCalled();
   });
   it("does not reuse an old attempt after credential rotation", async () => {
     const s = setup(); await s.lookup(target, s.fingerprint);
@@ -129,9 +129,9 @@ describe("homologation-only CUIT lookup", () => {
     vi.useFakeTimers();
     const s = setup(); s.fetchFn.mockImplementation(() => new Promise(() => {}));
     const pending = expect(s.lookup(target, s.fingerprint)).rejects.toMatchObject({ code: "timeout", diagnostic: { stage: "padron", category: "timeout" } });
-    await vi.advanceTimersByTimeAsync(4100); await pending;
+    await vi.advanceTimersByTimeAsync(25100); await pending;
     const db = setup(); db.repository.get.mockImplementation(() => new Promise(() => {}));
     const pendingDb = expect(db.lookup(target, db.fingerprint)).rejects.toMatchObject({ code: "timeout" });
-    await vi.advanceTimersByTimeAsync(10100); await pendingDb; expect(db.fetchFn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(65100); await pendingDb; expect(db.fetchFn).not.toHaveBeenCalled();
   });
 });

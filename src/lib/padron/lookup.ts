@@ -1,3 +1,4 @@
+import { HOMOLOGACION_CALL_MS, HOMOLOGACION_QUERY_MS } from "@/adapters/arca/timeouts";
 import { createHash } from "node:crypto";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { ARCA_SERVICE_PADRON, PADRON_HOMOLOGACION_URL, WSAA_HOMOLOGACION_URL } from "@/adapters/arca/constants";
@@ -67,7 +68,7 @@ export function createPadronLookup({ repository, store, env, fetchFn = fetch, at
     if (!target) throw new PadronLookupError("invalid_cuit");
     let stage: QueryStage | undefined;
     try {
-      return await deadline(10_000, async signal => {
+      return await deadline(HOMOLOGACION_QUERY_MS, async signal => {
         const stored = await repository.get(); signal.throwIfAborted();
         if (!stored) throw new PadronLookupError("credentials");
         let cert: ReturnType<typeof inspectCertificate>; let keyPem: string;
@@ -89,7 +90,7 @@ export function createPadronLookup({ repository, store, env, fetchFn = fetch, at
           const currentAttempt = attempt;
           const transport = { async post(url: string, body: string, headers: Record<string, string>) {
             const callStage = url === WSAA_HOMOLOGACION_URL ? "wsaa" : "padron";
-            return deadline(4_000, async callSignal => {
+            return deadline(HOMOLOGACION_CALL_MS, async callSignal => {
               signal.throwIfAborted(); callSignal.throwIfAborted();
               if (url !== WSAA_HOMOLOGACION_URL && url !== PADRON_HOMOLOGACION_URL) throw new PadronLookupError("upstream");
               let response: Response | undefined;

@@ -107,12 +107,12 @@ describe("persisted credential homologation authentication check", () => {
   });
   it("bounds per-call hangs and reports each timeout without leaking details", async () => {
     vi.useFakeTimers(); const s = setup(); s.fetchFn.mockImplementation((_url, init) => new Promise((_resolve, reject) => { init?.signal?.addEventListener("abort", () => reject(new DOMException("SECRET", "TimeoutError"))); }));
-    const pending = s.check(s.fingerprint()); await vi.advanceTimersByTimeAsync(4100);
+    const pending = s.check(s.fingerprint()); await vi.advanceTimersByTimeAsync(25100);
     expect((await pending).services.map(r => r.status)).toEqual(["timeout", "timeout"]);
   });
   it("bounds the total operation even when persistence hangs", async () => {
     vi.useFakeTimers(); const s = setup(); s.repository.get.mockImplementation(() => new Promise(() => {}));
     const pending = s.check(s.fingerprint()); const assertion = expect(pending).rejects.toBeInstanceOf(ConnectionCheckError);
-    await vi.advanceTimersByTimeAsync(10100); await assertion; expect(s.fetchFn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(65100); await assertion; expect(s.fetchFn).not.toHaveBeenCalled();
   });
 });

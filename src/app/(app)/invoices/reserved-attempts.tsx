@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { HOMOLOGACION_UI_MS } from "@/adapters/arca/timeouts";
 import type { ConsultationReport } from "@/lib/invoices/reconciliation";
 import { formatCentavos } from "@/domain/money";
 import { safeQueryDiagnostic, type QueryDiagnostic } from "@/adapters/arca/query-diagnostics";
@@ -52,7 +53,7 @@ function Attempt({ row, enabled }: {
         const startedIdentity = identity;
         const request = new AbortController();
         controller.current = request;
-        const timeout = setTimeout(() => request.abort(), 12000);
+        const timeout = setTimeout(() => request.abort(), HOMOLOGACION_UI_MS);
         const active = () => mounted.current && currentIdentity.current === startedIdentity && controller.current === request;
         try {
             const response = await fetch(`/api/invoices/${row.invoiceId}/consult`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", cache: "no-store", signal: request.signal });

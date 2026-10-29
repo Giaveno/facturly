@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import * as audit from "@/lib/audit/audit";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "@/test-support/test-db";
 import {
   auditLog,
+  emissionSeriesClaims,
   batches,
   clients,
   delegations,
@@ -39,6 +41,7 @@ import { parseFecaesolicitarResponse } from "@/adapters/arca/wsfe";
 import { WsfeClient } from "@/adapters/arca/wsfe";
 import { ArcaGatewayProd } from "@/adapters/arca/arca-gateway.prod";
 import { PadronA5Client } from "@/adapters/arca/padron";
+import { acquireSeriesClaim } from "./series-claim";
 
 const FIXED_DATE = new Date("2026-09-22T00:00:00.000Z");
 const MONOTRIBUTISTA = "30710145764";
@@ -50,6 +53,7 @@ class CountingGateway implements ArcaGateway {
 
   constructor(private readonly inner: ArcaGateway) {}
 
+  consultInvoice(r: FECAEReq) { return this.inner.consultInvoice!(r); }
   getIvaCondition(c: string, p: string) {
     return this.inner.getIvaCondition(c, p);
   }
@@ -74,6 +78,10 @@ class LostResponseGateway implements ArcaGateway {
   }
   async ultimoAutorizado(c: string, p: number, t: number) {
     return this.last.get(`${c}:${p}:${t}`) ?? 0;
+  }
+  async consultInvoice(r: FECAEReq): Promise<IssueInvoiceResult | null> {
+    if (this.last.get(`${r.cuit}:${r.ptoVta}:${r.cbteTipo}`) !== r.cbteNro) return null;
+    return {cae:String(CAE_BASE+r.cbteNro),caeFchVto:"2026-10-02",cbteNro:r.cbteNro};
   }
   async issueInvoice(r: FECAEReq): Promise<IssueInvoiceResult> {
     this.issueCalls.push(r.cbteNro);
@@ -102,6 +110,7 @@ class ThrowingGateway implements ArcaGateway {
     private readonly error: Error,
   ) {}
 
+  consultInvoice(r: FECAEReq) { return this.inner.consultInvoice!(r); }
   getIvaCondition(c: string, p: string) {
     return this.inner.getIvaCondition(c, p);
   }
@@ -137,6 +146,7 @@ describe("emission service — idempotency reservation + status machine", () => 
   });
 
   beforeEach(async () => {
+    await db.delete(emissionSeriesClaims);
     await db.delete(auditLog);
     await db.delete(issuedInvoices);
     await db.delete(invoices);
@@ -149,6 +159,59 @@ describe("emission service — idempotency reservation + status machine", () => 
 
   afterAll(async () => {
     await close();
+  });
+
+  it("commits authorization and its own claim release together even if post-commit audit fails", async () => {
+    await seedDelegation(true);
+    const { invoiceId } = await seedApprovedInvoice();
+    const gateway = new CountingGateway(new ArcaGatewayFake(undefined, () => FIXED_DATE));
+    const realWriteAudit = audit.writeAudit;
+    const spy = vi.spyOn(audit, "writeAudit").mockImplementation(async (db, entry) => {
+      if (entry.action === "emission.cae_persisted") throw Error("offline audit unavailable");
+      return realWriteAudit(db, entry);
+    });
+    try {
+      await emitBatch(deps(gateway), [invoiceId]);
+    } finally { spy.mockRestore(); }
+    expect((await db.select().from(invoices).where(eq(invoices.id, invoiceId)))[0]?.status).toBe("EMITTED");
+    expect((await db.select().from(issuedInvoices).where(eq(issuedInvoices.invoiceId, invoiceId)))[0]?.cae).toMatch(/^\d{14}$/);
+    expect(await db.select().from(emissionSeriesClaims)).toEqual([expect.objectContaining({owner:null,uncertain:false})]);
+    // A restarted dispatcher can continue the next number without reissuing the old invoice.
+    const { invoiceId: nextId } = await seedApprovedInvoice();
+    expect((await emitBatch(deps(gateway), [nextId]))[0]).toMatchObject({outcome:"emitted"});
+    expect(gateway.issueCalls).toEqual([1,2]);
+    expect((await emitBatch(deps(gateway), [invoiceId]))[0]).toMatchObject({outcome:"already_emitted"});
+    expect(gateway.issueCalls).toEqual([1,2]);
+  });
+
+  it("does not release a new dispatch claim when looking up an older invoice with persisted CAE", async () => {
+    await seedDelegation(true);
+    const { invoiceId } = await seedApprovedInvoice();
+    const gateway = new CountingGateway(new ArcaGatewayFake(undefined, () => FIXED_DATE));
+    expect((await emitBatch(deps(gateway), [invoiceId]))[0]).toMatchObject({outcome:"emitted"});
+    const [released] = await db.select().from(emissionSeriesClaims);
+    expect(await acquireSeriesClaim(db, released!.seriesKey, "new-unrelated-dispatch")).toBe(true);
+    expect((await emitBatch(deps(gateway), [invoiceId]))[0]).toMatchObject({outcome:"already_emitted"});
+    expect((await db.select().from(emissionSeriesClaims))[0]?.owner).toBe("new-unrelated-dispatch");
+    expect(gateway.issueCalls).toEqual([1]);
+  });
+
+  it("atomically releases the observed uncertain claim when consultation recovers CAE before an audit failure", async () => {
+    await seedDelegation(true);
+    const { invoiceId } = await seedApprovedInvoice();
+    const gateway = new LostResponseGateway();
+    gateway.loseNext = true;
+    expect((await emitBatch(deps(gateway), [invoiceId]))[0]).toMatchObject({outcome:"failed_transient"});
+    const realWriteAudit = audit.writeAudit;
+    const spy = vi.spyOn(audit, "writeAudit").mockImplementation(async (db, entry) => {
+      if (entry.action === "emission.cae_persisted") throw Error("offline recovered audit unavailable");
+      return realWriteAudit(db, entry);
+    });
+    try { await emitBatch(deps(gateway), [invoiceId]); }
+    finally { spy.mockRestore(); }
+    expect((await db.select().from(invoices).where(eq(invoices.id, invoiceId)))[0]?.status).toBe("EMITTED");
+    expect(await db.select().from(emissionSeriesClaims)).toEqual([expect.objectContaining({owner:null,uncertain:false})]);
+    expect(gateway.issueCalls).toEqual([1]);
   });
 
   it("keeps malformed issuance terminal and reserved with an explicitly uncertain outcome", async () => {
@@ -310,7 +373,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     expect(audits.some((a) => a.action === "emission.cae_persisted")).toBe(true);
   });
 
-  it("allocates the number ONCE per (cuit,ptoVta,cbteTipo) and increments locally", async () => {
+  it("queries strict ARCA last+1 for each fresh reservation after authorization", async () => {
     await seedDelegation(true);
     const a = await seedApprovedInvoice();
     const b = await seedApprovedInvoice();
@@ -323,12 +386,12 @@ describe("emission service — idempotency reservation + status machine", () => 
 
     expect(results.map((r) => r.cbteNro)).toEqual([1, 2]);
     // FECompUltimoAutorizado queried exactly once (not once per invoice).
-    expect(counting.ultimoAutorizadoCalls).toBe(1);
+    expect(counting.ultimoAutorizadoCalls).toBe(2);
     // Emitted serially in order.
     expect(counting.issueCalls).toEqual([1, 2]);
   });
 
-  it("lost-response retry replays the SAME cbteNro and never emits a second invoice", async () => {
+  it("lost-response recovery consults the SAME cbteNro without another issue", async () => {
     await seedDelegation(true);
     const { invoiceId } = await seedApprovedInvoice();
     const gateway = new LostResponseGateway();
@@ -359,7 +422,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     expect(result.emitted).toBe(true);
 
     // The gateway saw the SAME number both times (never an incremented 2).
-    expect(gateway.issueCalls).toEqual([1, 1]);
+    expect(gateway.issueCalls).toEqual([1]);
 
     const rows = await db.select().from(issuedInvoices);
     expect(rows).toHaveLength(1); // still ONE reservation — no second invoice
@@ -379,11 +442,11 @@ describe("emission service — idempotency reservation + status machine", () => 
 
     // Simulate "ARCA emitted cbteNro 5 but the DB write of the CAE failed":
     // ARCA knows the number (record it), but our reservation has no CAE.
-    await gateway.issueInvoice({
+    for (let number = 1; number <= 5; number++) await gateway.issueInvoice({
       cuit: "20123456789",
       ptoVta: 1,
       cbteTipo: 1,
-      cbteNro: 5,
+      cbteNro: number,
       receptorDocTipo: 80,
       receptorDocNro: Number(MONOTRIBUTISTA),
       condicionIvaReceptorId: 6,
@@ -397,6 +460,7 @@ describe("emission service — idempotency reservation + status machine", () => 
       importeTotal: 121000,
     });
     await db.insert(issuedInvoices).values({
+      environment: "homologacion",
       invoiceId,
       cuit: "20123456789",
       ptoVta: 1,
@@ -433,6 +497,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     await seedDelegation(true);
     const { invoiceId } = await seedApprovedInvoice();
     const base = {
+      environment: "homologacion" as const,
       invoiceId,
       cuit: "20123456789",
       ptoVta: 1,
@@ -551,6 +616,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     // the reservation pins cbteNro 4 but has NULL CAE and the invoice is
     // stuck in EMIT_ERROR — exactly what the recovery sweeper must re-drive.
     await db.insert(issuedInvoices).values({
+      environment: "homologacion",
       invoiceId,
       cuit: "20123456789",
       ptoVta: 1,
@@ -565,26 +631,20 @@ describe("emission service — idempotency reservation + status machine", () => 
       .set({ status: "EMIT_ERROR" })
       .where(eq(invoices.id, invoiceId));
 
-    // The JOB-LEVEL recovery path (not a direct emitInvoice call).
     const results = await recoverStuckEmissions(deps(gateway));
-
     expect(results).toHaveLength(1);
-    expect(results[0]!.outcome).toBe("emitted");
-    expect(results[0]!.cbteNro).toBe(4); // replay the pinned number, NOT a fresh 5
+    expect(results[0]!.outcome).toBe("failed_permanent");
+    expect(results[0]!.error).toContain("unresolved");
     const rows = await db.select().from(issuedInvoices);
-    expect(rows).toHaveLength(1); // still ONE reservation — no second invoice
-    expect(rows[0]!.cae).toHaveLength(14);
-    const [invoice] = await db
-      .select()
-      .from(invoices)
-      .where(eq(invoices.id, invoiceId));
-    expect(invoice!.status).toBe("EMITTED");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.cae).toBeNull();
   });
 
   it("the unique invoice_id index rejects a second reservation for the SAME invoice (concurrency guard)", async () => {
     await seedDelegation(true);
     const { invoiceId } = await seedApprovedInvoice();
     const base = {
+      environment: "homologacion" as const,
       invoiceId,
       cuit: "20123456789",
       ptoVta: 1,
@@ -619,7 +679,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     // Per-row isolation: the batch continues past the permanent failure.
     expect(results[0]!.outcome).toBe("failed_permanent");
     expect(results[0]!.arcaCode).toBe("10049");
-    expect(results[1]!.outcome).toBe("emitted");
+    expect(results[1]!.outcome).toBe("failed_permanent");
 
     // Permanent → terminal EMIT_FAILED, NEVER re-queued by the recovery sweeper.
     const [failedInvoice] = await db
@@ -658,7 +718,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     const results = await emitBatch(deps(gateway), [a.invoiceId, b.invoiceId]);
 
     expect(results[0]!.outcome).toBe("failed_transient");
-    expect(results[1]!.outcome).toBe("emitted");
+    expect(results[1]!.outcome).toBe("failed_permanent");
 
     // Transient → EMIT_ERROR, re-queued by the recovery sweeper.
     const [failedInvoice] = await db
@@ -683,7 +743,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     ).toBe(true);
   });
 
-  it("W3: NumberAllocator seeds from max(local, ARCA) so a stale reservation is never re-allocated", async () => {
+  it("blocks local reservations ahead of ARCA instead of skipping numbers", async () => {
     // ARCA says 5 is the last authorized, but a local reservation already holds
     // 10 (crash after commit, before ARCA). The allocator MUST continue at 11,
     // never re-allocate ARCA's stale 6.
@@ -691,7 +751,7 @@ describe("emission service — idempotency reservation + status machine", () => 
       ultimoAutorizado: async () => 5,
     } as unknown as ArcaGateway;
     const allocator = new NumberAllocator(staleArca, async () => 10);
-    expect(await allocator.next("20123456789", 1, 1)).toBe(11);
+    await expect(allocator.next("20123456789", 1, 1)).rejects.toThrow(/unresolved|ahead|reserved/i);
 
     // Triangulate the other direction: local 3 < ARCA 7 → continue at 8.
     const aheadArca = {
@@ -708,6 +768,7 @@ describe("emission service — idempotency reservation + status machine", () => 
 
     // Invoice B already holds number 1 in the same (cuit,ptoVta,cbteTipo) key.
     await db.insert(issuedInvoices).values({
+      environment: "homologacion",
       invoiceId: b.invoiceId,
       cuit: "20123456789",
       ptoVta: 1,
@@ -725,7 +786,7 @@ describe("emission service — idempotency reservation + status machine", () => 
 
     await expect(
       emitInvoice(deps(gateway), allocator, a.invoiceId),
-    ).rejects.toThrow(ReservationCollisionError);
+    ).rejects.toThrow(/Unresolved reserved/);
 
     // The reservation transaction rolled back — no orphan for invoice A.
     const rows = await db
@@ -752,6 +813,28 @@ describe("emission service — idempotency reservation + status machine", () => 
     const results = await emitBatch(deps(gateway), [a.invoiceId, b.invoiceId]);
 
     expect(results[0]!.outcome).toBe("failed_collision");
-    expect(results[1]!.outcome).toBe("emitted"); // the batch continues
+    expect(results[1]!.outcome).toBe("failed_permanent"); // the batch continues
   });
+  it("holds one cross-process owner over reserve and send, including an existing reservation",async()=>{
+    await seedDelegation(true);const a=await seedApprovedInvoice();const b=await seedApprovedInvoice();
+    const gateway=new CountingGateway(new ArcaGatewayFake(undefined,()=>FIXED_DATE));
+    let entered!:()=>void,release!:()=>void;
+    const ready=new Promise<void>(resolve=>{entered=resolve;});const gate=new Promise<void>(resolve=>{release=resolve;});
+    const original=gateway.issueInvoice.bind(gateway);
+    gateway.issueInvoice=async req=>{entered();await gate;return original(req);};
+    const first=emitInvoice(deps(gateway),new NumberAllocator(gateway),a.invoiceId);
+    await ready;
+    await expect(emitInvoice(deps(gateway),new NumberAllocator(gateway),a.invoiceId)).rejects.toThrow(/actively dispatching/);
+    await expect(emitInvoice(deps(gateway),new NumberAllocator(gateway),b.invoiceId)).rejects.toThrow(/active or uncertain claim/);
+    release();await first;expect(gateway.issueCalls).toEqual([1]);
+  });
+  it("unknown legacy provenance blocks fresh allocation without changing the old reservation",async()=>{
+    await seedDelegation(true);const old=await seedApprovedInvoice();const next=await seedApprovedInvoice();
+    await db.insert(issuedInvoices).values({invoiceId:old.invoiceId,cuit:"20123456789",ptoVta:1,cbteTipo:1,cbteNro:1,importeTotalCentavos:121000});
+    const gateway=new CountingGateway(new ArcaGatewayFake());
+    await expect(emitInvoice(deps(gateway),new NumberAllocator(gateway),next.invoiceId)).rejects.toThrow(/Unresolved reserved/);
+    expect(gateway.ultimoAutorizadoCalls).toBe(0);expect(gateway.issueCalls).toEqual([]);
+    const [preserved]=await db.select().from(issuedInvoices);expect(preserved).toMatchObject({environment:null,cbteNro:1,cae:null});
+  });
+
 });

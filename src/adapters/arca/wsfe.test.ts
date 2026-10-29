@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import { XMLValidator } from "fast-xml-parser";
 import {
@@ -56,7 +57,7 @@ describe("wsfe — buildFecaesolicitarEnvelope", () => {
     expect(xml).toContain("<ar:ImpTotal>1210.00</ar:ImpTotal>");
     expect(xml).toContain("<ar:ImpNeto>1000.00</ar:ImpNeto>");
     expect(xml).toContain("<ar:ImpIVA>210.00</ar:ImpIVA>");
-    expect(xml).toContain("<ar:FchVtoPago>20261022</ar:FchVtoPago>");
+    expect(xml).not.toContain("<ar:FchVtoPago>");
     expect(xml).toContain("<ar:MonId>PES</ar:MonId>");
     expect(xml).toContain("<ar:MonCotiz>1</ar:MonCotiz>");
     // IVA breakdown.
@@ -353,4 +354,17 @@ describe("wsfe — WsfeClient (injectable transport, offline)", () => {
     expect(posted).toContain("<ar:FECAESolicitar>");
     expect(posted).toContain("<ar:Cuit>20123456786</ar:Cuit>");
   });
+});
+
+it("matches the official homologacion WSDL FEDetRequest sequence and goods date omission", () => {
+  const wsdl = readFileSync(new URL("./fixtures/wsfe-homologacion.wsdl", import.meta.url), "utf8");
+  const base = /<s:complexType name="FEDetRequest">([\s\S]*?)<\/s:complexType>/.exec(wsdl)![1]!;
+  const names = [...base.matchAll(/<s:element[^>]* name="([^"]+)"/g)].map(m => m[1]!);
+  const xml = buildFecaesolicitarEnvelope(AUTH, REQ);
+  const detail = /<ar:FECAEDetRequest>(.*?)<\/ar:FECAEDetRequest>/.exec(xml)![1]!;
+  const emitted = [...detail.matchAll(/<ar:(\w+)>/g)].map(m => m[1]!).filter(n => names.includes(n));
+  expect(emitted).toEqual(names.filter(n => emitted.includes(n)));
+  expect(xml).not.toContain("FchVtoPago");
+  const service = buildFecaesolicitarEnvelope(AUTH, { ...REQ, concepto: 2 });
+  expect(service).toContain("<ar:FchVtoPago>20261022</ar:FchVtoPago>");
 });

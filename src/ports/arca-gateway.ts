@@ -19,8 +19,7 @@ export interface FECAEReq {
   /**
    * The INTENDED comprobante number (CbteDesde = CbteHasta). The caller pins
    * this (from a persisted reservation); the gateway does NOT derive it from
-   * FECompUltimoAutorizado. A retry MUST replay the SAME number so ARCA returns
-   * 10015/10016 and the existing CAE is recovered via FECompConsultar.
+   * FECompUltimoAutorizado. Existing reservations are consulted, never reissued.
    */
   cbteNro: number;
   /** Receptor document type (80 CUIT, 99 consumidor final). */
@@ -74,13 +73,15 @@ export interface ArcaGateway {
     clientCuit: string,
     payerCuit: string,
   ): Promise<CondicionIVA | "unresolved">;
-  issueInvoice(r: FECAEReq): Promise<IssueInvoiceResult>;
+  /** Revalidate ownership after authentication, immediately before issuance dispatch. */
+  issueInvoice(r: FECAEReq, beforeDispatch?: () => Promise<void>): Promise<IssueInvoiceResult>;
+  /** Read-only lookup that returns a result only after exact fiscal comparison. */
+  consultInvoice?(r: FECAEReq): Promise<IssueInvoiceResult | null>;
   /**
    * The LAST authorized comprobante number for `(cuit, ptoVta, cbteTipo)`
-   * (WSFEv1 `FECompUltimoAutorizado`). The emission job queries this ONCE per
-   * `(ptoVta, cbteTipo)` per batch and increments locally for subsequent
-   * invoices — never once per invoice. Returns 0 when nothing has been issued
-   * yet, so the first comprobante is 1.
+   * (WSFEv1 `FECompUltimoAutorizado`). Every fresh reservation uses validated
+   * remote last+1 under its durable series claim. An explicit returned 0 means
+   * the next comprobante is 1; missing values and provider errors are not zero.
    */
   ultimoAutorizado(
     cuit: string,

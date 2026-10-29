@@ -1,0 +1,32 @@
+import { and, eq, isNull } from "drizzle-orm";
+import { emissionSeriesClaims } from "@/lib/db/schema";
+import type { Db } from "@/lib/db/types";
+export const SERIES_LEASE_MS = 180_000;
+export function seriesKey(environment: "production" | "homologacion", cuit: string, ptoVta: number, cbteTipo: number): string {
+  return JSON.stringify([environment,cuit,ptoVta,cbteTipo]);
+}
+/** Atomic compare-and-set, shared by every worker. Never steal even an expired claim. */
+export async function acquireSeriesClaim(db: Db, key: string, owner: string, now = Date.now()): Promise<boolean> {
+  const rows = await db.insert(emissionSeriesClaims).values({seriesKey:key,owner,leaseExpiresAtMs:now+SERIES_LEASE_MS,uncertain:false})
+    .onConflictDoUpdate({target:emissionSeriesClaims.seriesKey,set:{owner,leaseExpiresAtMs:now+SERIES_LEASE_MS},where:and(isNull(emissionSeriesClaims.owner),eq(emissionSeriesClaims.uncertain,false))}).returning();
+  return rows[0]?.owner === owner;
+}
+export async function finishSeriesClaim(db: Db, key: string, owner: string, authorized: boolean): Promise<void> {
+  await db.update(emissionSeriesClaims).set({owner:null,uncertain:!authorized,leaseExpiresAtMs:Date.now()})
+    .where(and(eq(emissionSeriesClaims.seriesKey,key),eq(emissionSeriesClaims.owner,owner)));
+}
+/** Recovery releases only the exact observed generation, never a subsequent dispatch. */
+export async function reconcileSeriesClaim(db: Db, observed: typeof emissionSeriesClaims.$inferSelect): Promise<void> {
+  await db.update(emissionSeriesClaims).set({owner:null,uncertain:false}).where(and(
+    eq(emissionSeriesClaims.seriesKey,observed.seriesKey),
+    observed.owner === null ? isNull(emissionSeriesClaims.owner) : eq(emissionSeriesClaims.owner,observed.owner),
+    eq(emissionSeriesClaims.leaseExpiresAtMs,observed.leaseExpiresAtMs),
+    eq(emissionSeriesClaims.uncertain,observed.uncertain),
+  ));
+}
+/** Revalidate immediately before dispatch, so late work cannot outlive a recovered lease. */
+export async function ownsSeriesClaim(db: Db, key: string, owner: string, clock: () => number = Date.now): Promise<boolean> {
+  const [claim]=await db.select().from(emissionSeriesClaims).where(and(eq(emissionSeriesClaims.seriesKey,key),eq(emissionSeriesClaims.owner,owner)));
+  const now = clock();
+  return !!claim && !claim.uncertain && claim.leaseExpiresAtMs>now;
+}

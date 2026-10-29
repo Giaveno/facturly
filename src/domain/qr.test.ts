@@ -61,7 +61,7 @@ describe("qr — RG 4892 payload", () => {
   it("produces the exact official URL with a raw base64 payload", () => {
     expect(QR_BASE_URL).toBe(OFFICIAL_BASE_URL);
     // Independent oracle: the canonical base64 of the sample payload, derived
-    // from the RG 4892 field spec (13 fields, `importe` = integer centavos) —
+    // from the RG 4892 field spec (13 fields, `importe` = currency units) —
     // NOT computed by the implementation under test. If the encoding were
     // wrong (URL-safe alphabet, URL-encoding, wrong byte order), this literal
     // mismatch would catch it.
@@ -76,18 +76,10 @@ describe("qr — RG 4892 payload", () => {
     expect(decoded).toEqual(sample);
   });
 
-  it("transmits importe as integer centavos (official RG 4892 example)", () => {
-    // Official RG 4892 example: $121.00 → importe = 12100 (two implied decimals).
-    const dollar121 = { ...sample, importe: 12100 };
-    const decoded121 = decodeUrl(buildQrUrl(dollar121));
-    expect(decoded121.importe).toBe(12100);
-    expect(Number.isInteger(decoded121.importe)).toBe(true);
-
-    // Boundary: $0.01 → 1 centavo.
-    const oneCent = { ...sample, importe: 1 };
-    const decoded1 = decodeUrl(buildQrUrl(oneCent));
-    expect(decoded1.importe).toBe(1);
-    expect(Number.isInteger(decoded1.importe)).toBe(true);
+  it("transmits decimal currency units, including fractional cents precision", () => {
+    expect(decodeUrl(buildQrUrl({...sample,importe:6250})).importe).toBe(6250);
+    expect(decodeUrl(buildQrUrl({...sample,importe:6250.01})).importe).toBe(6250.01);
+    expect(decodeUrl(buildQrUrl({...sample,importe:0.01})).importe).toBe(0.01);
   });
 
   it("tipoCodAut is always 'E' (CAE)", () => {

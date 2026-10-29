@@ -1,3 +1,4 @@
+import { ArcaBusinessError } from "./errors";
 /**
  * Deterministic in-memory ARCA gateway fake. No network, no keys.
  *
@@ -80,7 +81,12 @@ export class ArcaGatewayFake implements ArcaGateway {
     return this.lastAuthorized.get(key(cuit, ptoVta, cbteTipo)) ?? 0;
   }
 
-  async issueInvoice(req: FECAEReq): Promise<IssueInvoiceResult> {
+  async consultInvoice(req: FECAEReq): Promise<IssueInvoiceResult | null> {
+    return this.issued.get(`${key(req.cuit,req.ptoVta,req.cbteTipo)}:${req.cbteNro}`) ?? null;
+  }
+
+  async issueInvoice(req: FECAEReq, beforeDispatch?: () => Promise<void>): Promise<IssueInvoiceResult> {
+    await beforeDispatch?.();
     // The fake honors the CALLER-PINNED number (the port contract since slice 3).
     const cbteNro = req.cbteNro;
     const duplicateKey = `${key(req.cuit, req.ptoVta, req.cbteTipo)}:${cbteNro}`;
@@ -89,6 +95,8 @@ export class ArcaGatewayFake implements ArcaGateway {
     // (models ARCA 10015/10016 → FECompConsultar).
     const prior = this.issued.get(duplicateKey);
     if (prior) return prior;
+    const last = this.lastAuthorized.get(key(req.cuit,req.ptoVta,req.cbteTipo)) ?? 0;
+    if (!Number.isSafeInteger(cbteNro) || cbteNro !== last + 1) throw new ArcaBusinessError("Strict comprobante sequence requires ultimo+1", {code:"10016"});
 
     const result: IssueInvoiceResult = {
       cae: String(CAE_BASE + cbteNro).padStart(14, "0"),

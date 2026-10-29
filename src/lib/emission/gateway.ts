@@ -1,3 +1,4 @@
+import { arcaTimeouts } from "@/adapters/arca/timeouts";
 /**
  * Production `ArcaGateway` composition — the piece that wires the WSAA/WSFEv1
  * adapters (slice 3) to real endpoints, credentials, and a DB-backed TA cache.
@@ -65,7 +66,7 @@ export function buildArcaGateway(
     wsfeUrl: arcaEnv === "production" ? WSFE_PRODUCTION_URL : WSFE_HOMOLOGACION_URL,
     padronUrl:
       arcaEnv === "production" ? PADRON_PRODUCTION_URL : PADRON_HOMOLOGACION_URL,
-    transport: createFetchTransport({ logger, metrics }),
+    transport: createFetchTransport({ logger, metrics, timeoutMs: arcaTimeouts(arcaEnv).callMs }),
     taStore: new DrizzleTaCacheStore(db),
     emissionsEnabled: readEmissionsEnabled(env),
     logger,

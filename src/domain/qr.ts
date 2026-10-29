@@ -4,10 +4,9 @@
  * Builds the base64 JSON payload that ARCA requires in the invoice QR, in the
  * URL form: https://www.arca.gob.ar/fe/qr/?p=<base64 json>.
  *
- * The payload carries EXACTLY 13 fields (see QrData). `importe` is the total
- * amount in INTEGER centavos — RG 4892 specifies the field as "Decimal up to
- * 13 integer digits and 2 decimals", which ARCA transmits as the integer value
- * with the two decimals implied (e.g. 12100 === $121.00). No floating point.
+ * The payload carries exactly 13 fields (see QrData). `importe` is a JSON
+ * decimal in currency units, NOT integer centavos (625000 cents = 6250 pesos).
+ * Source: https://www.arca.gob.ar/fe/qr/documentos/QRespecificaciones.pdf
  */
 
 export interface QrData {
@@ -23,7 +22,7 @@ export interface QrData {
   tipoCmp: number;
   /** Comprobante number. */
   nroCmp: number;
-  /** Total amount in integer centavos. */
+  /** Total amount in currency units, at most two decimal places. */
   importe: number;
   /** 3-char currency code, e.g. "PES". */
   moneda: string;

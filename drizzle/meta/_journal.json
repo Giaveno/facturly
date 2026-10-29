@@ -57,6 +57,13 @@
       "when": 1793215200000,
       "tag": "0007_recipient_modes",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793220000000,
+      "tag": "0008_emission_series_claims",
+      "breakpoints": true
     }
   ]
 }

@@ -1,3 +1,4 @@
+import { HOMOLOGACION_CALL_MS, HOMOLOGACION_QUERY_MS } from "@/adapters/arca/timeouts";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
@@ -100,7 +101,7 @@ export function createPointsOfSaleChecker({ repository, getClient, store, env, f
     if (env.ARCA_ENV !== "homologacion") throw new PointsOfSaleError("environment");
     let stage: QueryStage | undefined;
     try {
-      return await deadline(10_000, async signal => {
+      return await deadline(HOMOLOGACION_QUERY_MS, async signal => {
         const client = await getClient(clientId);
         signal.throwIfAborted();
         if (!client) throw new PointsOfSaleError("not_found");
@@ -130,7 +131,7 @@ export function createPointsOfSaleChecker({ repository, getClient, store, env, f
           const currentAttempt = attempt;
           const transport = { async post(url: string, body: string, headers: Record<string, string>) {
             const callStage = url === WSAA_HOMOLOGACION_URL ? "wsaa" : "wsfe";
-            return deadline(4_000, async callSignal => {
+            return deadline(HOMOLOGACION_CALL_MS, async callSignal => {
               signal.throwIfAborted(); callSignal.throwIfAborted();
               if (url !== WSAA_HOMOLOGACION_URL && url !== WSFE_HOMOLOGACION_URL) throw new PointsOfSaleError("upstream");
               let response: Response | undefined;

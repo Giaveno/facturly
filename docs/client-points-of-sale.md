@@ -18,12 +18,12 @@ delegations or enable emissions. `EMISSIONS_ENABLED` is not consulted or changed
   LoginCms calls. Concurrent cache reads/refreshes also share a process-local
   certificate/endpoint/service identity across different clients and diagnostics;
   completed tickets remain only in the durable cache. Pending identities are
-  bounded to 128 and independently expire after eight seconds even if persistence
+  bounded to 128 and independently expire after thirty seconds even if persistence
   hangs; late reads cannot start a new remote call. Cache writes are the only
   persistence side effect.
-- Four-second outbound deadlines cover fetch and streamed body reads, with a
-  1 MiB body cap; the complete service operation has a ten-second deadline.
-  Browser requests have a twelve-second deadline. Exceptions/upstream text and
+- Twenty-five-second outbound deadlines cover fetch and streamed body reads, with a
+  1 MiB body cap; the complete service operation has a sixty-five-second deadline.
+  Browser requests have a seventy-second deadline. Exceptions/upstream text and
   credentials are never logged or returned.
 - Same-process requests share an identity/client-snapshot-scoped attempt for
   fifteen seconds, including failures; memory is bounded to 128 attempts.

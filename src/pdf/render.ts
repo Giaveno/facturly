@@ -60,7 +60,7 @@ export function buildInvoiceQrData(input: InvoicePdfInput): QrData {
     ptoVta: input.ptoVta,
     tipoCmp: input.cbteTipo,
     nroCmp: input.cbteNro,
-    importe: input.importeTotal,
+    importe: input.importeTotal / 100,
     moneda: input.moneda,
     ctz: 1,
     tipoDocRec: input.receptorDocTipo,
