@@ -291,9 +291,8 @@ async function persistById(db: Db, key: string, id: string, patch: Partial<typeo
 }
 
 export async function emitComprobante(deps: ComprobanteEmissionDeps, input: ComprobanteEmissionInput): Promise<ComprobanteEmissionResult> {
-  const env = deps.env;
-  if (env) assertEmissionConfiguration(env);
-  else if (deps.environment === "production") assertEmissionConfiguration({ EMISSIONS_ENABLED: "true", ARCA_ENV: "production" });
+  const env = deps.env ?? process.env;
+  assertEmissionConfiguration(env);
   const configuredEnvironment = deps.environment ?? resolveArcaEnvironment(env ?? { ARCA_ENV: "homologacion" });
   const environment: ComprobanteAmbiente = configuredEnvironment === "production" ? "produccion" : configuredEnvironment;
   const now = deps.now ?? (() => new Date());

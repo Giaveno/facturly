@@ -26,7 +26,7 @@ describe("credit note emission", () => {
   }
   it("issues a mapped credit note and sends the CbtesAsoc reference", async () => {
     const empresaId = await company(); const source = await original(empresaId); const gateway = new ArcaGatewayFake(undefined, now); const issue = vi.spyOn(gateway, "issueInvoice");
-    const result = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, note(empresaId, source.id));
+    const result = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, note(empresaId, source.id));
     expect(result.estado).toBe("aprobado"); expect(issue.mock.calls[0]![0].cbteTipo).toBe(3); expect(issue.mock.calls[0]![0].cbtesAsoc).toEqual([{ tipo: 1, ptoVta: 1, nro: 1 }]);
   });
   it("reconciles a timed-out credit note on same-key retry instead of returning early", async () => {
@@ -36,35 +36,35 @@ describe("credit note emission", () => {
       issueInvoice: async (request: Parameters<ArcaGatewayFake["issueInvoice"]>[0]) => { await base.issueInvoice(request); throw new Error("timeout after authorization"); },
     };
     const request = note(empresaId, source.id, "timeout-credit-note");
-    const first = await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", now }, request);
+    const first = await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, request);
     expect(first.estado).toBe("incierto");
     const issue = vi.spyOn(base, "issueInvoice");
-    const second = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", now, uncertainGraceMs: 0 }, request);
+    const second = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now, uncertainGraceMs: 0 }, request);
     expect(second).toMatchObject({ estado: "aprobado", cbteNro: first.cbteNro, emitted: false });
     expect(issue).not.toHaveBeenCalled();
   });
   it("rejects cumulative excess before any gateway call", async () => {
     const empresaId = await company(); const source = await original(empresaId); await handle.db.insert(comprobantes).values({ ...note(empresaId, source.id, "prior"), ambiente: "homologacion", cbteNro: 2, estado: "aprobado", cae: "70000000000002", caeVto: "2026-11-08", resultado: "A" });
     const gateway = new ArcaGatewayFake(undefined, now); const calls = vi.spyOn(gateway, "ultimoAutorizado");
-    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, note(empresaId, source.id))).rejects.toThrow(/supera/); expect(calls).not.toHaveBeenCalled();
+    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, note(empresaId, source.id))).rejects.toThrow(/supera/); expect(calls).not.toHaveBeenCalled();
   });
   it.each(["borrador", "incierto"] as const)("rejects a non-approved original (%s) before ARCA", async (status) => {
     const empresaId = await company(); const source = await original(empresaId); await handle.db.update(comprobantes).set({ estado: status, cae: null, caeVto: null }).where(eq(comprobantes.id, source.id)); const gateway = new ArcaGatewayFake(undefined, now); const calls = vi.spyOn(gateway, "ultimoAutorizado");
-    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, note(empresaId, source.id))).rejects.toThrow(/aprobado/); expect(calls).not.toHaveBeenCalled();
+    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, note(empresaId, source.id))).rejects.toThrow(/aprobado/); expect(calls).not.toHaveBeenCalled();
   });
   it("rejects an original belonging to another company before ARCA", async () => {
     const sourceCompany = await company(); const targetCompany = await company("20123456787"); const source = await original(sourceCompany); const gateway = new ArcaGatewayFake(undefined, now); const calls = vi.spyOn(gateway, "ultimoAutorizado");
-    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, note(targetCompany, source.id))).rejects.toThrow(/otra empresa/); expect(calls).not.toHaveBeenCalled();
+    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, note(targetCompany, source.id))).rejects.toThrow(/otra empresa/); expect(calls).not.toHaveBeenCalled();
   });
   it("rejects a wrong credit-note type before ARCA", async () => {
     const empresaId = await company(); const source = await original(empresaId); const gateway = new ArcaGatewayFake(undefined, now); const calls = vi.spyOn(gateway, "ultimoAutorizado");
-    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, { ...note(empresaId, source.id), cbteTipo: 8 })).rejects.toThrow(/tipo de nota/); expect(calls).not.toHaveBeenCalled();
+    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, { ...note(empresaId, source.id), cbteTipo: 8 })).rejects.toThrow(/tipo de nota/); expect(calls).not.toHaveBeenCalled();
   });
   it.each([
     ["environment", { ambiente: "produccion" as const }],
     ["point of sale", { ptoVta: 2 }],
   ])("rejects an original from another %s before ARCA", async (_label, overrides) => {
     const empresaId = await company(); const source = await original(empresaId, overrides); const gateway = new ArcaGatewayFake(undefined, now); const calls = vi.spyOn(gateway, "ultimoAutorizado");
-    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, note(empresaId, source.id))).rejects.toThrow(/ambiente o punto de venta/); expect(calls).not.toHaveBeenCalled();
+    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, note(empresaId, source.id))).rejects.toThrow(/ambiente o punto de venta/); expect(calls).not.toHaveBeenCalled();
   });
 });

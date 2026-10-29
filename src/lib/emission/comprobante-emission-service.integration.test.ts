@@ -62,7 +62,7 @@ suite("comprobante emission against real Postgres", () => {
   }
   it("serializes five concurrent emissions and keeps consecutive numbers", async () => {
     const gateway = new SimulatedGateway();
-    const results = await Promise.all(Array.from({ length: 5 }, (_, i) => emitComprobante({ db, gateway, environment: "homologacion", now }, input(`integration-${i}`))));
+    const results = await Promise.all(Array.from({ length: 5 }, (_, i) => emitComprobante({ db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(`integration-${i}`))));
     expect(results.map((result) => result.cbteNro).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([1, 2, 3, 4, 5]);
     expect(gateway.maxSimultaneous).toBe(1);
   });
@@ -71,7 +71,7 @@ suite("comprobante emission against real Postgres", () => {
     expect(await acquireSeriesClaim(db, key, "crashed-owner", now().getTime() - SERIES_LEASE_MS - 1)).toBe(true);
     expect(await acquireSeriesClaim(db, key, "replacement", Date.now())).toBe(false);
     const gateway = new SimulatedGateway();
-    await recoverSeriesClaim({ db, gateway, environment: "homologacion", now, uncertainGraceMs: 0 }, { key, environment: "homologacion", emisorCuit: companyCuit, ptoVta: 1, cbteTipo: 11 });
+    await recoverSeriesClaim({ db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now, uncertainGraceMs: 0 }, { key, environment: "homologacion", emisorCuit: companyCuit, ptoVta: 1, cbteTipo: 11 });
     expect(await acquireSeriesClaim(db, key, "replacement", Date.now())).toBe(true);
     await db.delete(emissionSeriesClaims).where(eq(emissionSeriesClaims.seriesKey, key));
   });

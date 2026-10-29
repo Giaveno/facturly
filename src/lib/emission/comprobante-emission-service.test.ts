@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { ArcaBusinessError } from "@/adapters/arca/errors";
 import { ArcaGatewayFake } from "@/adapters/arca/arca-gateway.fake";
@@ -23,6 +23,16 @@ describe("comprobante emission service", () => {
   const now = () => new Date("2026-10-29T12:00:00Z");
 
   beforeAll(async () => { handle = await createTestDb(); });
+  it("checks the kill switch before any database access or gateway call, including default env", async () => {
+    const db = new Proxy({} as Db, { get() { throw new Error("database touched"); } });
+    const gateway = new Proxy({} as ArcaGateway, { get() { throw new Error("gateway touched"); } });
+    vi.stubEnv("EMISSIONS_ENABLED", "false");
+    try {
+      for (const env of [undefined, { EMISSIONS_ENABLED: "false", ARCA_ENV: "homologacion" }]) {
+        await expect(emitComprobante({ db, gateway, env }, {} as never)).rejects.toMatchObject({ code: "EMISSIONS_DISABLED" });
+      }
+    } finally { vi.unstubAllEnvs(); }
+  });
   afterAll(async () => { await handle.close(); });
   beforeEach(async () => {
     await handle.db.delete(comprobantes);
@@ -56,7 +66,7 @@ describe("comprobante emission service", () => {
       consultInvoice: base.consultInvoice.bind(base),
       issueInvoice: async () => { throw new Error("network timeout"); },
     };
-    await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", now, uncertainGraceMs: 0 }, input(empresa, "generation-a"));
+    await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now, uncertainGraceMs: 0 }, input(empresa, "generation-a"));
     const key = seriesKey("homologacion", "20123456786", 1, 1);
     const recovering = {
       getIvaCondition: base.getIvaCondition.bind(base),
@@ -67,7 +77,7 @@ describe("comprobante emission service", () => {
       },
       issueInvoice: async () => { throw new Error("must not issue"); },
     };
-    await expect(emitComprobante({ db: handle.db, gateway: recovering, environment: "homologacion", now, uncertainGraceMs: 0 }, input(empresa, "generation-b"))).rejects.toThrow(SERIES_BLOCKED_MESSAGE);
+    await expect(emitComprobante({ db: handle.db, gateway: recovering, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now, uncertainGraceMs: 0 }, input(empresa, "generation-b"))).rejects.toThrow(SERIES_BLOCKED_MESSAGE);
   });
 
   async function company(cuit = "20123456786") {
@@ -117,8 +127,8 @@ describe("comprobante emission service", () => {
     const empresa = await company();
     const gateway = new ArcaGatewayFake(undefined, now);
     const request = input(empresa, "same-key");
-    const first = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, request);
-    const second = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, request);
+    const first = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, request);
+    const second = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, request);
     expect(first).toMatchObject({ estado: "aprobado", cbteNro: 1, emitted: true });
     expect(second).toMatchObject({ estado: "aprobado", cbteNro: 1, emitted: false });
   });
@@ -127,8 +137,8 @@ describe("comprobante emission service", () => {
     const firstCompany = await company();
     const secondCompany = await company("30710145764");
     const gateway = new ArcaGatewayFake(undefined, now);
-    const first = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, input(firstCompany, "same-key"));
-    const second = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, input(secondCompany, "same-key", "30710145764"));
+    const first = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(firstCompany, "same-key"));
+    const second = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(secondCompany, "same-key", "30710145764"));
     expect(first.cbteNro).toBe(1);
     expect(second.cbteNro).toBe(1);
   });
@@ -142,7 +152,7 @@ describe("comprobante emission service", () => {
       consultInvoice: base.consultInvoice.bind(base),
       issueInvoice: async () => { throw new ArcaBusinessError("Importe inválido", { code: "10049" }); },
     };
-    const result = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, input(empresa));
+    const result = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa));
     expect(result).toMatchObject({ estado: "rechazado", resultado: "R", cbteNro: 1 });
     expect(result.errores).toContain("10049");
   });
@@ -156,8 +166,8 @@ describe("comprobante emission service", () => {
       consultInvoice: base.consultInvoice.bind(base),
       issueInvoice: async () => { throw new ArcaBusinessError("Importe inválido", { code: "10049" }); },
     };
-    const rejected = await emitComprobante({ db: handle.db, gateway: rejecting, environment: "homologacion", now }, input(empresa, "rejected"));
-    const next = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", now }, input(empresa, "next-after-rejection"));
+    const rejected = await emitComprobante({ db: handle.db, gateway: rejecting, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "rejected"));
+    const next = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "next-after-rejection"));
     expect(rejected.estado).toBe("rechazado");
     expect(next).toMatchObject({ estado: "aprobado", cbteNro: 1 });
   });
@@ -171,9 +181,9 @@ describe("comprobante emission service", () => {
       consultInvoice: base.consultInvoice.bind(base),
       issueInvoice: async () => { throw new Error("network timeout"); },
     };
-    const uncertain = await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", now }, input(empresa, "timeout"));
+    const uncertain = await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "timeout"));
     expect(uncertain).toMatchObject({ estado: "incierto", cbteNro: 1, errores: EMISSION_UNCERTAIN_REASON });
-    const next = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", now, uncertainGraceMs: 0 }, input(empresa, "next"));
+    const next = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now, uncertainGraceMs: 0 }, input(empresa, "next"));
     expect(next.cbteNro).toBe(1);
     const [orphan] = await handle.db.select().from(comprobantes);
     expect(orphan!.errores).toBe(RECONCILIATION_NOT_FOUND_REASON);
@@ -191,10 +201,10 @@ describe("comprobante emission service", () => {
         throw new Error("response lost after ARCA authorization");
       },
     };
-    const uncertain = await emitComprobante({ db: handle.db, gateway: timedOutAfterAuthorization, environment: "homologacion", now }, input(empresa, "timeout-authorized"));
+    const uncertain = await emitComprobante({ db: handle.db, gateway: timedOutAfterAuthorization, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "timeout-authorized"));
     expect(uncertain).toMatchObject({ estado: "incierto", cbteNro: 1 });
 
-    const recovered = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", now, uncertainGraceMs: 0 }, input(empresa, "after-reconciliation"));
+    const recovered = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now, uncertainGraceMs: 0 }, input(empresa, "after-reconciliation"));
     expect(recovered.cbteNro).toBe(2);
     const rows = await handle.db.select().from(comprobantes);
     expect(rows.find((row) => row.id === uncertain.id)).toMatchObject({ estado: "aprobado", cae: expect.any(String) });
@@ -215,8 +225,8 @@ describe("comprobante emission service", () => {
       },
     };
     const [first, second] = await Promise.all([
-      emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, input(empresa, "concurrent-a")),
-      emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, input(empresa, "concurrent-b")),
+      emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "concurrent-a")),
+      emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "concurrent-b")),
     ]);
     expect([first.cbteNro, second.cbteNro].sort()).toEqual([1, 2]);
     expect(first.estado).toBe("aprobado");
@@ -247,11 +257,11 @@ describe("comprobante emission service", () => {
       },
       issueInvoice: base.issueInvoice.bind(base),
     };
-    const recovery = recoverSeriesClaim({ db: handle.db, gateway, environment: "homologacion", now: () => new Date(), uncertainGraceMs: 0 }, {
+    const recovery = recoverSeriesClaim({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now: () => new Date(), uncertainGraceMs: 0 }, {
       key, environment: "homologacion", emisorCuit: "20123456786", ptoVta: 1, cbteTipo: 1,
     });
     await started;
-    const emission = emitComprobante({ db: handle.db, gateway, environment: "homologacion", now: () => new Date(), uncertainGraceMs: 0 }, input(empresa, "after-reconcile-race"));
+    const emission = emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now: () => new Date(), uncertainGraceMs: 0 }, input(empresa, "after-reconcile-race"));
     await new Promise((resolve) => setTimeout(resolve, 20));
     releaseConsult();
     await recovery;
@@ -277,7 +287,7 @@ describe("comprobante emission service", () => {
     const result = await emitComprobante({
       db: handle.db,
       gateway,
-      environment: "homologacion",
+      environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" },
       now,
       beforeArca: async () => { throw new Error("local dispatch preparation failed"); },
     }, input(empresa, "pre-arca-failure"));
@@ -304,7 +314,7 @@ describe("comprobante emission service", () => {
     const result = await emitComprobante({
       db: handle.db,
       gateway,
-      environment: "homologacion",
+      environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" },
       now,
       beforeArca: async () => {
         await handle.db.update(emissionSeriesClaims).set({ owner: null });
@@ -328,7 +338,7 @@ describe("comprobante emission service", () => {
       },
       issueInvoice: async () => { throw new Error("must not dispatch an already-authorized number"); },
     };
-    const result = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, input(empresa, "advanced-before-dispatch"));
+    const result = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "advanced-before-dispatch"));
     expect(result).toMatchObject({ estado: "aprobado", cbteNro: 1, cae: "70000000000001", emitted: false });
     expect(consultCalls).toBe(1);
   });
@@ -336,7 +346,7 @@ describe("comprobante emission service", () => {
   it("rejects an idempotency key whose persisted fiscal tuple differs", async () => {
     const empresa = await company();
     await insertDraft(empresa, "tuple-conflict", { estado: "rechazado", cbteNro: 7, ptoVta: 2 });
-    await expect(emitComprobante({ db: handle.db, gateway: new ArcaGatewayFake(undefined, now), environment: "homologacion", now }, input(empresa, "tuple-conflict")))
+    await expect(emitComprobante({ db: handle.db, gateway: new ArcaGatewayFake(undefined, now), environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "tuple-conflict")))
       .rejects.toThrow(IDEMPOTENCY_CONFLICT_REASON);
   });
 
@@ -351,7 +361,7 @@ describe("comprobante emission service", () => {
       consultInvoice: base.consultInvoice.bind(base),
       issueInvoice: async (...args: Parameters<typeof base.issueInvoice>) => { issueCalls += 1; return base.issueInvoice(...args); },
     };
-    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, input(empresa, "existing-draft")))
+    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "existing-draft")))
       .rejects.toThrow("borrador");
     expect(issueCalls).toBe(0);
     const [persisted] = await handle.db.select().from(comprobantes);
@@ -372,7 +382,7 @@ describe("comprobante emission service", () => {
       },
       issueInvoice: async () => { throw new Error("must not issue while reconciliation is uncertain"); },
     };
-    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", now }, input(empresa, "new-after-orphans")))
+    await expect(emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "new-after-orphans")))
       .rejects.toThrow(RECONCILIATION_UNCERTAIN_REASON);
     const rows = await handle.db.select().from(comprobantes);
     expect(rows.find((row) => row.idempotencyKey === "orphan-approved")).toMatchObject({ estado: "aprobado", cae: "70000000000001" });
