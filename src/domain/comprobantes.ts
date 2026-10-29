@@ -2,6 +2,8 @@ import { isValidCuit } from "./cuit";
 
 export type EmisorIvaCondition = "ri" | "monotributista" | "exento";
 export type ComprobanteTaxRate = 0 | 10.5 | 21 | 27;
+export type ComprobanteEstado = "borrador" | "pendiente" | "aprobado" | "rechazado" | "incierto";
+export type ComprobanteAmbiente = "homologacion" | "produccion";
 
 export interface ComprobanteItem {
   descripcion: string;
@@ -14,12 +16,17 @@ export interface ComprobanteItem {
 }
 
 export interface ComprobanteValidationInput {
+  emisorCuit: string;
   emisorCondicionIva?: EmisorIvaCondition;
   /** English alias used by the existing emission domain. */
   issuerCondition?: EmisorIvaCondition;
   cbteTipo: number;
   ptoVta: number;
   cbteNro?: number | null;
+  ambiente: ComprobanteAmbiente;
+  estado?: ComprobanteEstado;
+  cae?: string | null;
+  caeVto?: string | null;
   concepto: number;
   docTipo: number;
   docNro: string | number;
@@ -116,6 +123,12 @@ export function validateComprobante(input: ComprobanteValidationInput): Validate
   }
   const issues: string[] = [];
   const emisorCondicionIva = input.emisorCondicionIva ?? input.issuerCondition;
+  if (typeof input.emisorCuit !== "string" || !/^\d{11}$/.test(input.emisorCuit)) {
+    issues.push("EmisorCuit debe contener exactamente 11 dígitos");
+  }
+  if (!(input.ambiente === "homologacion" || input.ambiente === "produccion")) {
+    issues.push("Ambiente no es válido");
+  }
   if (!emisorCondicionIva || !["ri", "monotributista", "exento"].includes(emisorCondicionIva)) {
     issues.push("La condición IVA del emisor no es válida");
   }
@@ -127,7 +140,16 @@ export function validateComprobante(input: ComprobanteValidationInput): Validate
     issues.push("Un emisor monotributista o exento solo puede emitir comprobantes C");
   }
   if (!Number.isInteger(input.ptoVta) || input.ptoVta < 1 || input.ptoVta > 99999) issues.push("PtoVta no es válido");
-  if (input.cbteNro != null && (!Number.isSafeInteger(input.cbteNro) || input.cbteNro < 1 || input.cbteNro > 9_999_999)) issues.push("CbteNro no es válido");
+  if (input.cbteNro != null && (!Number.isSafeInteger(input.cbteNro) || input.cbteNro < 1 || input.cbteNro > 99_999_999)) issues.push("CbteNro no es válido");
+  if (input.estado != null && !["borrador", "pendiente", "aprobado", "rechazado", "incierto"].includes(input.estado)) {
+    issues.push("Estado no es válido");
+  }
+  if (input.estado === "pendiente" && input.cbteNro == null) {
+    issues.push("Un comprobante pendiente requiere CbteNro");
+  }
+  if (input.estado === "aprobado" && (typeof input.cae !== "string" || !input.cae.trim() || typeof input.caeVto !== "string" || !input.caeVto.trim() || input.cbteNro == null)) {
+    issues.push("Un comprobante aprobado requiere CAE, CAE vencimiento y CbteNro");
+  }
   if (![1, 2, 3].includes(input.concepto)) issues.push("Concepto no es válido");
   if (!RECEPTOR_IVA_IDS.has(input.condicionIvaReceptor)) issues.push("CondicionIVAReceptorId no es válida");
   if (!validateDate(input.fecha)) issues.push("Fecha no es válida");

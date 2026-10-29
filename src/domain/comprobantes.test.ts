@@ -16,6 +16,8 @@ const item = {
 };
 
 const base: ComprobanteValidationInput = {
+  emisorCuit: "30710145764",
+  ambiente: "homologacion",
   emisorCondicionIva: "ri",
   cbteTipo: 1,
   ptoVta: 1,
@@ -68,9 +70,24 @@ describe("pre-emission comprobante validation", () => {
   });
 
   it("bounds an assigned comprobante number", () => {
-    expect(validateComprobante({ ...base, cbteNro: 9_999_999 }).cbteNro).toBe(9_999_999);
-    rejects({ cbteNro: 10_000_000 }, /CbteNro/);
+    expect(validateComprobante({ ...base, cbteNro: 99_999_999 }).cbteNro).toBe(99_999_999);
+    rejects({ cbteNro: 100_000_000 }, /CbteNro/);
     rejects({ cbteNro: 0 }, /CbteNro/);
+  });
+
+  it("requires an issuer CUIT and fiscal numbers for pending/approved states", () => {
+    rejects({ emisorCuit: "3071014576" }, /EmisorCuit/);
+    rejects({ emisorCuit: "3071014576A" }, /EmisorCuit/);
+    rejects({ estado: "pendiente" }, /pendiente requiere/);
+    rejects({ estado: "aprobado", cbteNro: 1, cae: null, caeVto: null }, /aprobado requiere/);
+    expect(validateComprobante({ ...base, estado: "pendiente", cbteNro: 1 }).estado).toBe("pendiente");
+    expect(validateComprobante({ ...base, estado: "aprobado", cbteNro: 1, cae: "123", caeVto: "2026-11-01" }).estado).toBe("aprobado");
+  });
+
+  it("requires a recognized ARCA environment", () => {
+    rejects({ ambiente: undefined }, /Ambiente/);
+    rejects({ ambiente: "sandbox" as never }, /Ambiente/);
+    expect(validateComprobante({ ...base, ambiente: "produccion" }).ambiente).toBe("produccion");
   });
 
   it("sanitizes ARCA observations and errors before returning them", () => {

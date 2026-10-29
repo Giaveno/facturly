@@ -1,5 +1,5 @@
 {
-  "id": "49ccb830-769b-4f66-887e-cdf04ae74aeb",
+  "id": "8324999e-0d4a-4309-8bea-ad55498a3297",
   "prevId": "edc6e873-9cf2-49c7-abd8-6de76ae87fa8",
   "version": "7",
   "dialect": "postgresql",
@@ -253,6 +253,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "ambiente": {
+          "name": "ambiente",
+          "type": "comprobante_ambiente",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
         "emisor_cuit": {
           "name": "emisor_cuit",
           "type": "text",
@@ -396,9 +403,9 @@
           "primaryKey": false,
           "notNull": true
         },
-        "cbte_asociado": {
-          "name": "cbte_asociado",
-          "type": "jsonb",
+        "comprobante_asociado_id": {
+          "name": "comprobante_asociado_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },
@@ -422,6 +429,12 @@
           "name": "comprobantes_idempotency_key_unique",
           "columns": [
             {
+              "expression": "empresa_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
               "expression": "idempotency_key",
               "isExpression": false,
               "asc": true,
@@ -429,6 +442,46 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "comprobantes_fiscal_identity_unique": {
+          "name": "comprobantes_fiscal_identity_unique",
+          "columns": [
+            {
+              "expression": "ambiente",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "emisor_cuit",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "pto_vta",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "cbte_tipo",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "cbte_nro",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"comprobantes\".\"cbte_nro\" IS NOT NULL AND \"comprobantes\".\"estado\" <> 'rechazado'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -447,35 +500,48 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "comprobantes_comprobante_asociado_id_comprobantes_id_fk": {
+          "name": "comprobantes_comprobante_asociado_id_comprobantes_id_fk",
+          "tableFrom": "comprobantes",
+          "tableTo": "comprobantes",
+          "columnsFrom": [
+            "comprobante_asociado_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "comprobantes_emisor_cuit_check": {
+          "name": "comprobantes_emisor_cuit_check",
+          "value": "\"comprobantes\".\"emisor_cuit\" ~ '^[0-9]{11}$'"
+        },
         "comprobantes_pto_vta_check": {
           "name": "comprobantes_pto_vta_check",
           "value": "\"comprobantes\".\"pto_vta\" BETWEEN 1 AND 99999"
         },
         "comprobantes_cbte_nro_check": {
           "name": "comprobantes_cbte_nro_check",
-          "value": "\"comprobantes\".\"cbte_nro\" IS NULL OR \"comprobantes\".\"cbte_nro\" BETWEEN 1 AND 9999999"
+          "value": "\"comprobantes\".\"cbte_nro\" IS NULL OR \"comprobantes\".\"cbte_nro\" BETWEEN 1 AND 99999999"
         },
         "comprobantes_concepto_check": {
           "name": "comprobantes_concepto_check",
           "value": "\"comprobantes\".\"concepto\" IN (1, 2, 3)"
         },
-        "comprobantes_doc_tipo_check": {
-          "name": "comprobantes_doc_tipo_check",
-          "value": "\"comprobantes\".\"doc_tipo\" IN (80, 86, 87, 89, 90, 91, 92, 93, 94, 95, 96, 99)"
+        "comprobantes_aprobado_requirements_check": {
+          "name": "comprobantes_aprobado_requirements_check",
+          "value": "\"comprobantes\".\"estado\" <> 'aprobado' OR (\"comprobantes\".\"cae\" IS NOT NULL AND \"comprobantes\".\"cae_vto\" IS NOT NULL AND \"comprobantes\".\"cbte_nro\" IS NOT NULL)"
         },
-        "comprobantes_condicion_iva_receptor_check": {
-          "name": "comprobantes_condicion_iva_receptor_check",
-          "value": "\"comprobantes\".\"condicion_iva_receptor\" IN (1, 4, 5, 6)"
-        },
-        "comprobantes_doc_99_condicion_check": {
-          "name": "comprobantes_doc_99_condicion_check",
-          "value": "\"comprobantes\".\"doc_tipo\" <> 99 OR \"comprobantes\".\"condicion_iva_receptor\" = 5"
+        "comprobantes_pendiente_requirements_check": {
+          "name": "comprobantes_pendiente_requirements_check",
+          "value": "\"comprobantes\".\"estado\" <> 'pendiente' OR \"comprobantes\".\"cbte_nro\" IS NOT NULL"
         },
         "comprobantes_importes_non_negative_check": {
           "name": "comprobantes_importes_non_negative_check",
@@ -1366,6 +1432,14 @@
     }
   },
   "enums": {
+    "public.comprobante_ambiente": {
+      "name": "comprobante_ambiente",
+      "schema": "public",
+      "values": [
+        "homologacion",
+        "produccion"
+      ]
+    },
     "public.comprobante_emisor_condicion_iva": {
       "name": "comprobante_emisor_condicion_iva",
       "schema": "public",

@@ -29,6 +29,7 @@ import {
   check,
   date,
   integer,
+  type AnyPgColumn,
   jsonb,
   numeric,
   pgEnum,
@@ -95,6 +96,12 @@ export const comprobanteEstado = pgEnum("comprobante_estado", [
   "aprobado",
   "rechazado",
   "incierto",
+]);
+
+/** ARCA environment in which a comprobante is issued. */
+export const comprobanteAmbiente = pgEnum("comprobante_ambiente", [
+  "homologacion",
+  "produccion",
 ]);
 
 /** Issuer conditions allowed on a comprobante snapshot (consumer final cannot issue). */
@@ -404,6 +411,7 @@ export const comprobantes = pgTable(
     empresaId: uuid("empresa_id")
       .notNull()
       .references(() => clients.id),
+    ambiente: comprobanteAmbiente("ambiente").notNull(),
     emisorCuit: text("emisor_cuit").notNull(),
     emisorCondicionIva: comprobanteEmisorCondicionIva("emisor_condicion_iva").notNull(),
     cbteTipo: integer("cbte_tipo").notNull(),
@@ -427,18 +435,21 @@ export const comprobantes = pgTable(
     observaciones: text("observaciones"),
     errores: text("errores"),
     idempotencyKey: text("idempotency_key").notNull(),
-    cbteAsociado: jsonb("cbte_asociado"),
+    comprobanteAsociadoId: uuid("comprobante_asociado_id").references((): AnyPgColumn => comprobantes.id),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("comprobantes_idempotency_key_unique").on(table.idempotencyKey),
+    uniqueIndex("comprobantes_idempotency_key_unique").on(table.empresaId, table.idempotencyKey),
+    uniqueIndex("comprobantes_fiscal_identity_unique")
+      .on(table.ambiente, table.emisorCuit, table.ptoVta, table.cbteTipo, table.cbteNro)
+      .where(sql`${table.cbteNro} IS NOT NULL AND ${table.estado} <> 'rechazado'`),
+    check("comprobantes_emisor_cuit_check", sql`${table.emisorCuit} ~ '^[0-9]{11}$'`),
     check("comprobantes_pto_vta_check", sql`${table.ptoVta} BETWEEN 1 AND 99999`),
-    check("comprobantes_cbte_nro_check", sql`${table.cbteNro} IS NULL OR ${table.cbteNro} BETWEEN 1 AND 9999999`),
+    check("comprobantes_cbte_nro_check", sql`${table.cbteNro} IS NULL OR ${table.cbteNro} BETWEEN 1 AND 99999999`),
     check("comprobantes_concepto_check", sql`${table.concepto} IN (1, 2, 3)`),
-    check("comprobantes_doc_tipo_check", sql`${table.docTipo} IN (80, 86, 87, 89, 90, 91, 92, 93, 94, 95, 96, 99)`),
-    check("comprobantes_condicion_iva_receptor_check", sql`${table.condicionIvaReceptor} IN (1, 4, 5, 6)`),
-    check("comprobantes_doc_99_condicion_check", sql`${table.docTipo} <> 99 OR ${table.condicionIvaReceptor} = 5`),
+    check("comprobantes_aprobado_requirements_check", sql`${table.estado} <> 'aprobado' OR (${table.cae} IS NOT NULL AND ${table.caeVto} IS NOT NULL AND ${table.cbteNro} IS NOT NULL)`),
+    check("comprobantes_pendiente_requirements_check", sql`${table.estado} <> 'pendiente' OR ${table.cbteNro} IS NOT NULL`),
     check("comprobantes_importes_non_negative_check", sql`${table.importeNetoCentavos} >= 0 AND ${table.importeIvaCentavos} >= 0 AND ${table.importeExentoCentavos} >= 0 AND ${table.importeTributosCentavos} >= 0 AND ${table.importeTotalCentavos} >= 0`),
     check("comprobantes_importes_total_check", sql`${table.importeTotalCentavos} = ${table.importeNetoCentavos} + ${table.importeIvaCentavos} + ${table.importeExentoCentavos} + ${table.importeTributosCentavos}`),
   ],
