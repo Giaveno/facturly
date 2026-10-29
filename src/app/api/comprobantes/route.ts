@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { isUuid } from "@/lib/upload/guard";
 import { getDb } from "@/lib/db/client";
 import { comprobantes } from "@/lib/db/schema";
 import { requireAccountantSession, isUnauthorizedError } from "@/lib/auth/session";
@@ -21,12 +22,14 @@ async function auth(correlationId: string, req?: Request) {
   return null;
 }
 
-export async function GET(): Promise<Response> {
+export async function GET(req: Request): Promise<Response> {
   const correlationId = randomUUID();
   const denied = await auth(correlationId);
   if (denied) return denied;
+  const empresaId = new URL(req.url).searchParams.get("empresaId") ?? req.headers.get("x-empresa-id");
+  if (!empresaId || !isUuid(empresaId)) return errorJson(403, "Company scope required", correlationId);
   try {
-    const rows = await getDb().select({ id: comprobantes.id, estado: comprobantes.estado, cbteTipo: comprobantes.cbteTipo, cbteNro: comprobantes.cbteNro, cae: comprobantes.cae, caeVto: comprobantes.caeVto, errores: comprobantes.errores, ambiente: comprobantes.ambiente, createdAt: comprobantes.createdAt }).from(comprobantes).orderBy(comprobantes.createdAt);
+    const rows = await getDb().select({ id: comprobantes.id, empresaId: comprobantes.empresaId, estado: comprobantes.estado, cbteTipo: comprobantes.cbteTipo, cbteNro: comprobantes.cbteNro, cae: comprobantes.cae, caeVto: comprobantes.caeVto, errores: comprobantes.errores, ambiente: comprobantes.ambiente, createdAt: comprobantes.createdAt }).from(comprobantes).where(eq(comprobantes.empresaId, empresaId)).orderBy(comprobantes.createdAt);
     return NextResponse.json(rows);
   } catch (err) { console.error(`[comprobantes] ${correlationId} list failed`, err); return errorJson(500, "Failed to list comprobantes", correlationId); }
 }
@@ -50,3 +53,4 @@ export async function POST(req: Request): Promise<Response> {
     return errorJson(blocked ? 409 : err instanceof ComprobanteEmissionError ? 422 : 500, fiscal, correlationId, { code: blocked ? "SERIES_BLOCKED" : arca?.code, status: blocked ? "incierto" : undefined, arca });
   }
 }
+

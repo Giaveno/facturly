@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { decodeQrPayload, QR_BASE_URL } from "@/domain/qr";
 import {
   buildInvoicePdfModel,
+  buildComprobantePdfModel,
   buildInvoiceQrData,
   buildInvoiceQrUrl,
   renderInvoicePdf,
@@ -25,6 +26,20 @@ const base: InvoicePdfInput = {
 };
 
 describe("invoice PDF — RG 4892 QR + CAE + due date + Ley 27.618 legend", () => {
+  it("formats comprobante fiscal number as five-digit POS plus eight-digit number", () => {
+    const model = buildComprobantePdfModel({
+      empresaId: "00000000-0000-4000-8000-000000000001", issuerName: "ACME", issuerCuit: base.cuit,
+      environment: "produccion", cbteTipo: 1, ptoVta: 1, cbteNro: 108, fecha: base.fechaEmision,
+      docTipo: 99, docNro: "0", receptorRazonSocial: "Consumidor Final", condicionIvaReceptor: 5,
+      importeNetoCentavos: 100, importeIvaCentavos: 0, importeExentoCentavos: 0, importeTributosCentavos: 0,
+      importeTotalCentavos: 100, items: [{ descripcion: "item", netoCentavos: 100, ivaCentavos: 0, exentoCentavos: 0, tributosCentavos: 0, totalCentavos: 100, alicuota: 0 }],
+      cae: base.cae, caeVto: base.caeFchVto,
+    });
+    expect(model.lines).toContainEqual({ label: "Número", value: "00001-00000108" });
+    expect(model.issuer?.name).toBe("ACME");
+    expect(model.lines).toContainEqual({ label: "Receptor", value: "Consumidor Final" });
+    expect(model.issuer?.name).not.toBe("Consumidor Final");
+  });
   it("keeps anonymous CF identity and QR document99/0 without a fictitious CUIT",()=>{
     const input={...base,cbteTipo:11 as const,receptorRazonSocial:"Consumidor Final",receptorDocTipo:99,receptorDocNro:0,condicionIvaReceptorId:5};
     const model=buildInvoicePdfModel(input);
