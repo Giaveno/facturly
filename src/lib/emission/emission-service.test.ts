@@ -15,6 +15,7 @@ import {
 import { ArcaGatewayFake, CAE_BASE } from "@/adapters/arca/arca-gateway.fake";
 import {
   approveInvoice,
+  markInvoiceReviewed,
   materializeInvoice,
 } from "@/lib/review/workflow";
 import { RowNotEmittableError } from "@/domain/emission";
@@ -34,6 +35,10 @@ import {
 import type { ArcaGateway, FECAEReq, IssueInvoiceResult } from "@/ports/arca-gateway";
 import type { CbteTipo } from "@/domain/policy";
 import type { Db } from "@/lib/db/types";
+import { parseFecaesolicitarResponse } from "@/adapters/arca/wsfe";
+import { WsfeClient } from "@/adapters/arca/wsfe";
+import { ArcaGatewayProd } from "@/adapters/arca/arca-gateway.prod";
+import { PadronA5Client } from "@/adapters/arca/padron";
 
 const FIXED_DATE = new Date("2026-09-22T00:00:00.000Z");
 const MONOTRIBUTISTA = "30710145764";
@@ -146,6 +151,45 @@ describe("emission service — idempotency reservation + status machine", () => 
     await close();
   });
 
+  it("keeps malformed issuance terminal and reserved with an explicitly uncertain outcome", async () => {
+    await seedDelegation(true);
+    const { invoiceId } = await seedApprovedInvoice();
+    let uncertain: Error | undefined;
+    try { parseFecaesolicitarResponse("<Envelope/>"); } catch (error) { uncertain = error as Error; }
+    expect(uncertain).toBeInstanceOf(ArcaBusinessError);
+    const gateway = new ThrowingGateway(new ArcaGatewayFake(undefined, () => FIXED_DATE), 1, uncertain!);
+    const [result] = await emitBatch(deps(gateway), [invoiceId]);
+    expect(result).toMatchObject({ outcome: "failed_permanent", stage: "issuance", category: "malformed-response" });
+    expect(result!.error).toContain("outcome uncertain");
+    expect((await db.select().from(invoices).where(eq(invoices.id, invoiceId)))[0]!.status).toBe("EMIT_FAILED");
+    expect(await db.select().from(issuedInvoices).where(eq(issuedInvoices.invoiceId, invoiceId))).toEqual([expect.objectContaining({ cbteNro: 1, cae: null })]);
+    expect(await listRecoverableInvoiceIds(db)).not.toContain(invoiceId);
+  });
+
+  it("holds an Errors-only number conflict with malformed consultation through the full gateway/service path", async () => {
+    await seedDelegation(true);
+    const { invoiceId } = await seedApprovedInvoice();
+    const operations: string[] = [];
+    const gateway = new ArcaGatewayProd({
+      emissionsEnabled: true,
+      taCache: { get: async () => ({ token: "TOKEN", sign: "SIGN", expirationTime: "2026-09-23T00:00:00Z" }), evict: async () => {} },
+      padron: new PadronA5Client({ url: "offline", transport: { post: async () => { throw new Error("Unexpected padron query"); } } }),
+      wsfe: new WsfeClient({ url: "offline", transport: { post: async (_url, body) => {
+        if (body.includes("<ar:FECompUltimoAutorizado>")) { operations.push("ultimo"); return "<Envelope><Body><FECompUltimoAutorizadoResponse><FECompUltimoAutorizadoResult><CbteNro>0</CbteNro></FECompUltimoAutorizadoResult></FECompUltimoAutorizadoResponse></Body></Envelope>"; }
+        if (body.includes("<ar:FECAESolicitar>")) { operations.push("issuance"); return "<Envelope><Body><FECAESolicitarResponse><FECAESolicitarResult><Errors><Err><Code>10016</Code><Msg>SECRET_TOKEN</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></Body></Envelope>"; }
+        operations.push("consultation"); return "<Envelope/>";
+      } } }),
+    });
+    const [result] = await emitBatch(deps(gateway), [invoiceId]);
+    expect(result).toMatchObject({ outcome: "failed_permanent", stage: "issuance", category: "malformed-response" });
+    expect(result!.error).toContain("outcome uncertain");
+    expect(JSON.stringify(result)).not.toContain("SECRET");
+    expect(operations).toEqual(["ultimo", "issuance", "consultation"]);
+    expect((await db.select().from(invoices).where(eq(invoices.id, invoiceId)))[0]!.status).toBe("EMIT_FAILED");
+    expect(await db.select().from(issuedInvoices).where(eq(issuedInvoices.invoiceId, invoiceId))).toEqual([expect.objectContaining({ cbteNro: 1, cae: null })]);
+    expect(await listRecoverableInvoiceIds(db)).not.toContain(invoiceId);
+  });
+
   /** Seeds a delegation row for the client, or none when `enabled` is undefined. */
   async function seedDelegation(enabled: boolean | undefined) {
     if (enabled === undefined) return;
@@ -166,7 +210,7 @@ describe("emission service — idempotency reservation + status machine", () => 
       .returning();
     const [row] = await db
       .insert(ocrRows)
-      .values({
+      .values({recipientMode:"identified",taxRate:21,
         photoId: photo!.id,
         fields: { name: "PAGADOR S.A.", amount: 121000, date: "2026-09-22" },
         confidence: { name: 0.9, amount: 0.9 },
@@ -175,6 +219,7 @@ describe("emission service — idempotency reservation + status machine", () => 
       })
       .returning();
     const inv = await materializeInvoice(db, row!.id);
+    await markInvoiceReviewed(db,inv.id);
     await approveInvoice(db, approveGateway, inv.id, () => FIXED_DATE);
     return { invoiceId: inv.id, rowId: row!.id };
   }
@@ -184,6 +229,49 @@ describe("emission service — idempotency reservation + status machine", () => 
     gateway,
     emissionsEnabled,
     delayMs: 0,
+  });
+
+  it("ultimo rejection is safe and permanent before reservation; explicit retry uses the same approved invoice", async () => {
+    await seedDelegation(true);
+    const { invoiceId } = await seedApprovedInvoice();
+    const gateway = new CountingGateway(new ArcaGatewayFake(undefined, () => FIXED_DATE));
+    const original = gateway.ultimoAutorizado.bind(gateway);
+    gateway.ultimoAutorizado = async () => {
+      throw new ArcaBusinessError("ARCA ultimo failed (provider-errors, code=11002)", {
+        code: "11002", stage: "ultimo", category: "provider-errors", providerCodes: [11002],
+      });
+    };
+    expect(await emitBatch(deps(gateway), [invoiceId])).toEqual([expect.objectContaining({
+      outcome: "failed_permanent", stage: "ultimo", category: "provider-errors", arcaCode: "11002", providerCodes: [11002],
+    })]);
+    expect(await db.select().from(issuedInvoices)).toEqual([]);
+    expect(gateway.issueCalls).toEqual([]);
+    expect((await db.select().from(invoices).where(eq(invoices.id, invoiceId)))[0]!.status).toBe("APPROVED");
+    expect(await listRecoverableInvoiceIds(db)).toEqual([]);
+    gateway.ultimoAutorizado = original;
+    expect(await emitBatch(deps(gateway), [invoiceId])).toEqual([expect.objectContaining({ outcome: "emitted", cbteNro: 1 })]);
+    expect(gateway.issueCalls).toEqual([1]);
+  });
+
+  it("reports issuance rather than ultimo and strips unsafe typed error messages", async () => {
+    await seedDelegation(true);
+    const { invoiceId } = await seedApprovedInvoice();
+    const gateway = new ThrowingGateway(new ArcaGatewayFake(undefined, () => FIXED_DATE), 1,
+      new ArcaBusinessError("SECRET_RAW_SOAP", { code: "10049" }));
+    const [result] = await emitBatch(deps(gateway), [invoiceId]);
+    expect(result).toMatchObject({ outcome: "failed_permanent", stage: "issuance", category: "provider-errors", arcaCode: "10049" });
+    expect(JSON.stringify(result)).not.toContain("SECRET");
+    expect(JSON.stringify(await db.select().from(auditLog))).not.toContain("SECRET");
+  });
+
+  it.each([NaN, -1, 1.5, Infinity, 100_000_000])("does not reserve an invalid provider number %s", async number => {
+    await seedDelegation(true);
+    const { invoiceId } = await seedApprovedInvoice();
+    const gateway = new CountingGateway(new ArcaGatewayFake(undefined, () => FIXED_DATE));
+    gateway.ultimoAutorizado = async () => number;
+    expect(await emitBatch(deps(gateway), [invoiceId])).toEqual([expect.objectContaining({ outcome: "failed_permanent", stage: "ultimo", category: "malformed-response" })]);
+    expect(await db.select().from(issuedInvoices)).toEqual([]);
+    expect(gateway.issueCalls).toEqual([]);
   });
 
   it("happy path: reserves, emits once, persists the 14-digit CAE, marks EMITTED", async () => {
@@ -249,7 +337,7 @@ describe("emission service — idempotency reservation + status machine", () => 
     const allocator = new NumberAllocator(gateway);
     // Attempt 1: ARCA accepts but the response is lost.
     await expect(emitInvoice(deps(gateway), allocator, invoiceId)).rejects.toThrow(
-      /lost response/,
+      /ARCA issuance failed \(internal\)/,
     );
 
     // Recoverable: reservation pinned cbteNro 1, invoice EMIT_ERROR.
@@ -389,7 +477,7 @@ describe("emission service — idempotency reservation + status machine", () => 
       .returning();
     const [row] = await db
       .insert(ocrRows)
-      .values({
+      .values({recipientMode:"identified",taxRate:21,
         photoId: photo!.id,
         fields: { name: "PAGADOR", amount: 121000, date: "2026-09-22" },
         confidence: { name: 0.5 }, // below threshold → BLOCKED

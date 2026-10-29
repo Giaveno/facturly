@@ -5,9 +5,11 @@
  */
 
 import { eq } from "drizzle-orm";
-import { batches, clients, ocrRows, photos, type CuitSource } from "@/lib/db/schema";
+import { auditLog, batches, clients, ocrRows, photos, type CuitSource } from "@/lib/db/schema";
 import { isValidCuit } from "@/domain/cuit";
-import { materializeInvoice } from "./workflow";
+import type { RecipientMode } from "@/domain/receipt";
+import type { CondicionIVA } from "@/domain/policy";
+import { materializeInvoice, ReviewRowNotFoundError } from "./workflow";
 import type { OcrFields } from "@/ports/ocr-provider";
 import type { Db } from "@/lib/db/types";
 
@@ -17,7 +19,15 @@ export interface ReviewRow {
   cuit: string | null;
   /** Where `cuit` came from: OCR, the registry read side, or a manual entry. */
   cuitSource: CuitSource | null;
+  recipientMode: RecipientMode;
+  recipientModeSource: string;
+  taxRate: number | null;
+  issuerCondition: CondicionIVA;
   fields: OcrFields;
+  confidence: Record<string, number>;
+  manualFields: string[];
+  issuerCuit: string;
+  ptoVta: number;
   clientId: string;
   razonSocial: string;
   /** UI hint only — see `isRowEmittable` for the real enforcement. */
@@ -55,7 +65,14 @@ export async function listReviewRows(db: Db): Promise<ReviewRow[]> {
       status: ocrRows.status,
       cuit: ocrRows.cuit,
       cuitSource: ocrRows.cuitSource,
+      recipientMode: ocrRows.recipientMode,
+      recipientModeSource: ocrRows.recipientModeSource,
+      taxRate: ocrRows.taxRate,
+      issuerCondition: clients.condicionIva,
       fields: ocrRows.fields,
+      confidence: ocrRows.confidence,
+      issuerCuit: clients.cuit,
+      ptoVta: clients.ptoVta,
       clientId: batches.clientId,
       razonSocial: clients.razonSocial,
       error: ocrRows.error,
@@ -66,32 +83,34 @@ export async function listReviewRows(db: Db): Promise<ReviewRow[]> {
     .innerJoin(clients, eq(batches.clientId, clients.id))
     .orderBy(ocrRows.createdAt);
 
+  const corrections = await db.select({rowId:auditLog.rowId,payload:auditLog.payload}).from(auditLog).where(eq(auditLog.action,"row.corrected"));
   return rows.map((r) => ({
+    manualFields: [...new Set(corrections.filter(a=>a.rowId===r.rowId).flatMap(a=>{
+      const fields = (a.payload as {changedFields?: unknown} | null)?.changedFields;
+      return Array.isArray(fields) ? fields.filter((key): key is string=>typeof key === "string") : [];
+    }))],
     ...r,
     blocked: r.status === "BLOCKED",
     failed: r.status === "FAILED",
   }));
 }
 
-/**
- * Lists review rows AND materializes each row's invoice (the documented
- * "materialize at review time" step). The materialization is now a GUARDED
- * upsert: it only CREATES a missing invoice and only PROMOTES PENDING → REVIEWED
- * — it can never regress an APPROVED/EMITTING/EMITTED/EMIT_ERROR/EMIT_FAILED/
- * REJECTED invoice, so a page GET cannot rewind fiscal state (C2). Kept SEPARATE
- * from the pure `listReviewRows` so existing callers (demo, ingest tests) are
- * unaffected.
- */
+/** Materializes missing invoices without confirming review or rewinding fiscal state. */
 export async function listReviewInvoices(db: Db): Promise<ReviewInvoiceRow[]> {
   const rows = await listReviewRows(db);
   const out: ReviewInvoiceRow[] = [];
   for (const r of rows) {
-    const invoice = await materializeInvoice(db, r.rowId);
+    let invoice: Awaited<ReturnType<typeof materializeInvoice>>;
+    try { invoice = await materializeInvoice(db, r.rowId); }
+    catch (error) {
+      if (error instanceof ReviewRowNotFoundError) continue; // Deleted after initial fetch.
+      throw error;
+    }
     out.push({
       ...r,
       invoiceId: invoice.id,
       invoiceStatus: invoice.status,
-      flagged: !r.cuit || !isValidCuit(r.cuit),
+      flagged: r.recipientMode === "identified" && (!r.cuit || !isValidCuit(r.cuit)),
     });
   }
   return out;

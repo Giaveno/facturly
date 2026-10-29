@@ -91,6 +91,7 @@ describe("wsfe — fecaReqToSolicitar → buildFecaesolicitarEnvelope (cross-bou
   // serialized envelope — the exact fields that were once swapped. If a future
   // refactor re-swaps them, THESE tests fail.
   const base: FECAEReq = {
+  taxRate:21,
     cuit: "20123456789",
     ptoVta: 1,
     cbteTipo: 1,
@@ -119,13 +120,14 @@ describe("wsfe — fecaReqToSolicitar → buildFecaesolicitarEnvelope (cross-bou
   it("Consumidor Final receptor → DocTipo 99 + CondicionIVAReceptorId 5 + DocNro 0", () => {
     const cf: FECAEReq = {
       ...base,
+      taxRate:21,
       cbteTipo: 6, // Factura B — no IVA breakdown for a final consumer
       receptorDocTipo: 99,
       receptorDocNro: 0,
       condicionIvaReceptorId: 5,
       importeNeto: 100000,
-      importeIva: 0,
-      importeTotal: 100000,
+      importeIva: 21000,
+      importeTotal: 121000,
     };
     const xml = buildFecaesolicitarEnvelope(AUTH, fecaReqToSolicitar(cf));
     expect(xml).toContain("<ar:DocTipo>99</ar:DocTipo>");
@@ -200,7 +202,7 @@ describe("wsfe — parseFecaesolicitarResponse", () => {
     expect(r.cbteNro).toBe(7);
     expect(r.errors).toEqual([]);
     expect(r.observaciones).toEqual([
-      { code: "10002", msg: "Sin errores" },
+      { code: "10002", msg: "ARCA provider observation" },
     ]);
   });
 
@@ -209,7 +211,7 @@ describe("wsfe — parseFecaesolicitarResponse", () => {
     expect(r.resultado).toBe("R");
     expect(r.cae).toBeNull();
     expect(r.errors).toEqual([
-      { code: "10015", msg: "El comprobante ya fue autorizado" },
+      { code: "10015", msg: "ARCA provider observation" },
     ]);
   });
 

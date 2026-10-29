@@ -20,6 +20,7 @@
 
 import { XMLParser } from "fast-xml-parser";
 import type { CondicionIVA } from "@/domain/policy";
+import { buildPadronLookupEnvelope, parsePadronLookup } from "./padron-lookup";
 import { ArcaBusinessError } from "./errors";
 import { escapeXml } from "./xml";
 
@@ -204,13 +205,12 @@ export class PadronA5Client {
     cuitRepresentada: string,
     idPersona: string,
   ): Promise<CondicionIVA | "unresolved"> {
-    const body = buildGetPersonaEnvelope(
+    const body = buildPadronLookupEnvelope(
       { token, sign, cuitRepresentada },
       idPersona,
     );
     const response = await this.transport.post(this.url, body, SOAP_HEADERS);
-    const persona = parseGetPersonaResponse(response);
-    // Throws on errorConstancia/errorMonotributo (fail loud — never downgrade).
-    return padronPersonaToCondicion(persona);
+    const persona = parsePadronLookup(response, idPersona);
+    return persona.condition === "no-determinada" ? "unresolved" : persona.condition;
   }
 }

@@ -25,6 +25,18 @@ const base: InvoicePdfInput = {
 };
 
 describe("invoice PDF — RG 4892 QR + CAE + due date + Ley 27.618 legend", () => {
+  it("keeps anonymous CF identity and QR document99/0 without a fictitious CUIT",()=>{
+    const input={...base,cbteTipo:11 as const,receptorRazonSocial:"Consumidor Final",receptorDocTipo:99,receptorDocNro:0,condicionIvaReceptorId:5};
+    const model=buildInvoicePdfModel(input);
+    expect(model.lines).toContainEqual({label:"Receptor",value:"Consumidor Final"});
+    expect(model.lines).toContainEqual({label:"Documento",value:"Sin identificar (99 / 0)"});
+    expect(buildInvoiceQrData(input)).toMatchObject({tipoDocRec:99,nroDocRec:0});
+  });
+  it("labels homologation only from recorded approval environment, never guesses legacy provenance",()=>{
+    expect(buildInvoicePdfModel({...base,environment:"homologacion"}).homologacion).toBe(true);
+    expect(buildInvoicePdfModel({...base,environment:"production"}).homologacion).toBe(false);
+    expect(buildInvoicePdfModel(base).homologacion).toBe(false);
+  });
   it("round-trips every QR field (raw base64, not URL-encoded)", () => {
     const url = buildInvoiceQrUrl(base);
     expect(url.startsWith(QR_BASE_URL)).toBe(true);

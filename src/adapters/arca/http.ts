@@ -9,7 +9,7 @@
  *   - a per-call timeout via `AbortSignal.timeout`, covering the BODY read too;
  *   - typed errors (`ArcaTransientError`/`ArcaAuthError`/`ArcaBusinessError`)
  *     instead of a bare `Error("HTTP <status>")`;
- *   - SOAP `<Fault>` bodies are parsed and surfaced (faultcode/faultstring);
+ *   - SOAP `<Fault>` bodies are classified with safe category/status metadata;
  *   - 429 honours `Retry-After`;
  *   - structured logging + counters (timeouts, transient failures).
  */
@@ -82,13 +82,17 @@ export function createFetchTransport(options: FetchTransportOptions = {}): HttpT
         logger.error(isTimeout ? "arca_timeout" : "network_error", {
           url,
           duration_ms: undefined,
-          message: err instanceof Error ? err.message : String(err),
+          category: isTimeout ? "timeout" : "network",
         });
         throw new ArcaTransientError(
           isTimeout
             ? `Timeout after ${timeoutMs}ms calling ${url}`
             : `Network error calling ${url}`,
-          { cause: err },
+          {
+            category: isTimeout ? "timeout" : "network",
+            // Preserve timeout identity for existing callers, never the original exception text.
+            cause: isTimeout ? new DOMException("ARCA call timed out", "TimeoutError") : undefined,
+          },
         );
       }
 
@@ -96,24 +100,30 @@ export function createFetchTransport(options: FetchTransportOptions = {}): HttpT
       let text: string;
       try {
         text = await res.text();
-      } catch (err) {
+      } catch {
         metrics.increment("arca_timeout");
-        logger.error("arca_timeout", { url, message: err instanceof Error ? err.message : String(err) });
-        throw new ArcaTransientError(`Timeout reading response body from ${url}`, { cause: err });
+        logger.error("arca_timeout", { url, category: "timeout" });
+        throw new ArcaTransientError("ARCA response body timed out", {
+          category: "timeout", cause: new DOMException("ARCA response body timed out", "TimeoutError"),
+        });
       }
 
+      if (text.length > 1_048_576 || /<!DOCTYPE|<!ENTITY/i.test(text)) {
+        throw new ArcaBusinessError("ARCA response rejected", {
+          category: text.length > 1_048_576 ? "response-too-large" : "malformed-response",
+        });
+      }
       // A SOAP Fault can arrive as HTTP 500 (most common) OR HTTP 200.
       const fault = parseSoapFault(text);
       if (fault) {
         const kind = classifyFaultCode(fault.faultcode);
-        const message = `SOAP Fault from ${url}` +
-          (fault.faultcode ? ` (faultcode=${fault.faultcode})` : "") +
-          (fault.faultstring ? `: ${fault.faultstring}` : "");
-        logger.error("soap_fault", { url, kind, faultcode: fault.faultcode, faultstring: fault.faultstring });
+        const message = "ARCA SOAP Fault";
+        const details = { category: "soap-fault" as const, httpStatus: res.status };
+        logger.error("soap_fault", { url, kind, category: "soap-fault", status: res.status });
         metrics.increment("soap_fault");
-        if (kind === "auth") throw new ArcaAuthError(message, fault);
-        if (kind === "transient") throw new ArcaTransientError(message, fault);
-        throw new ArcaBusinessError(message, fault);
+        if (kind === "auth") throw new ArcaAuthError(message, details);
+        if (kind === "transient") throw new ArcaTransientError(message, details);
+        throw new ArcaBusinessError(message, details);
       }
 
       if (!res.ok) {
@@ -122,16 +132,16 @@ export function createFetchTransport(options: FetchTransportOptions = {}): HttpT
         if (res.status === 429 || res.status >= 500) {
           metrics.increment("http_transient");
           logger.warn("http_transient", { url, status: res.status, retry_after_ms: retryAfterMs });
-          throw new ArcaTransientError(`HTTP ${res.status} from ${url}`, { retryAfterMs });
+          throw new ArcaTransientError(`ARCA HTTP ${res.status}`, { retryAfterMs, category: "http", httpStatus: res.status });
         }
         if (res.status === 401 || res.status === 403) {
           metrics.increment("http_auth");
           logger.error("http_auth", { url, status: res.status });
-          throw new ArcaAuthError(`HTTP ${res.status} from ${url}`);
+          throw new ArcaAuthError(`ARCA HTTP ${res.status}`, { category: "http", httpStatus: res.status });
         }
         metrics.increment("http_business");
         logger.error("http_business", { url, status: res.status });
-        throw new ArcaBusinessError(`HTTP ${res.status} from ${url}`);
+        throw new ArcaBusinessError(`ARCA HTTP ${res.status}`, { category: "http", httpStatus: res.status });
       }
 
       return text;

@@ -62,20 +62,8 @@ export function assertRowEmittable(status: string): void {
   }
 }
 
-/**
- * Maps an OCR row status to the invoice status it implies, per the design:
- *
- *   BLOCKED   ⇒ invoice stays PENDING (the accountant must correct it first)
- *   CORRECTED ⇒ invoice becomes REVIEWED
- *
- * All other row states leave the invoice PENDING (CONFIDENT awaits review;
- * PENDING is the async OCR intermediate). Emission (APPROVED/EMITTING/EMITTED)
- * and rejection (REJECTED) are invoice-level transitions owned by slice 4 — see
- * `tasks` Phase 4.3.
- */
-export function invoiceStatusForRow(
-  status: OcrRowStatus,
-): "PENDING" | "REVIEWED" {
-  if (status === "CORRECTED") return "REVIEWED";
+/** OCR state never confirms review. Only the explicit accountant action may do so. */
+export function invoiceStatusForRow(status: OcrRowStatus): "PENDING" {
+  void status;
   return "PENDING";
 }

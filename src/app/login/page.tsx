@@ -4,8 +4,7 @@ import { useState, type FormEvent } from "react";
 import { signIn } from "next-auth/react";
 
 /**
- * Minimal login form (email + password) posting to NextAuth's credentials
- * provider. No styling. Shows a clear error on bad credentials.
+ * Email and password login through NextAuth credentials provider.
  */
 export default function LoginPage() {
   const [error, setError] = useState<string>("");
@@ -20,14 +19,15 @@ export default function LoginPage() {
     const email = String(form.get("email") ?? "");
     const password = String(form.get("password") ?? "");
 
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-    });
-
-    if (result?.error) {
-      setError("Invalid email or password");
+    try {
+      const result = await signIn("credentials", { email, password, redirect: false });
+      if (result?.error) {
+        setError("El correo o la contraseña no son correctos.");
+        setPending(false);
+        return;
+      }
+    } catch {
+      setError("No se pudo iniciar sesión. Revisá tu conexión e intentá nuevamente.");
       setPending(false);
       return;
     }
@@ -37,15 +37,18 @@ export default function LoginPage() {
   }
 
   return (
-    <main>
-      <h1>Sign in</h1>
-      <form onSubmit={onSubmit}>
+    <main className="auth-page">
+      <section className="surface auth-card">
+      <p className="eyebrow">Facturly · acceso seguro</p>
+      <h1>Iniciar sesión</h1>
+      <p>Ingresá a tu espacio de trabajo para gestionar comprobantes.</p>
+      <form className="auth-form" onSubmit={onSubmit}>
         <label>
-          Email
+          Correo electrónico
           <input name="email" type="email" required autoComplete="email" />
         </label>
         <label>
-          Password
+          Contraseña
           <input
             name="password"
             type="password"
@@ -54,10 +57,11 @@ export default function LoginPage() {
           />
         </label>
         <button type="submit" disabled={pending}>
-          {pending ? "Signing in…" : "Sign in"}
+          {pending ? "Ingresando…" : "Iniciar sesión"}
         </button>
       </form>
-      {error ? <p role="alert">{error}</p> : null}
+      {error ? <p className="error" role="alert">{error}</p> : null}
+      </section>
     </main>
   );
 }

@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db/client";
 import { listClients } from "@/lib/clients/clients";
+import { getCredentialInfo } from "@/lib/credentials/service";
 import ClientsForm from "./clients-form";
 import ClientActions from "./client-actions";
 
@@ -12,16 +13,19 @@ export const dynamic = "force-dynamic";
  * design work.
  */
 export default async function ClientsPage() {
-  const clients = await listClients(getDb());
+  const db = getDb();
+  const clients = await listClients(db);
+  const homologationEnabled = process.env.ARCA_ENV === "homologacion";
+  const certificate = homologationEnabled ? await getCredentialInfo(db).catch(() => null) : null;
 
   return (
-    <main>
-      <h1>Clients</h1>
+    <main className="page-content">
+      <div className="page-heading"><div><p className="eyebrow">Empresas emisoras</p><h1>Clientes</h1><p className="lede">Administrá los datos fiscales y las delegaciones de las empresas con las que trabajás.</p></div></div>
       <ClientsForm />
 
-      <h2>Client companies</h2>
+      <section className="page-section"><h2>Empresas registradas <span className="count-badge">{clients.length}</span></h2>
       {clients.length === 0 ? (
-        <p>No clients yet.</p>
+        <div className="empty-state"><strong>Todavía no hay clientes registrados.</strong><p>Creá una empresa emisora para poder cargar comprobantes.</p></div>
       ) : (
         <table>
           <thead>
@@ -31,7 +35,7 @@ export default async function ClientsPage() {
               <th>Pto. Vta.</th>
               <th>Condición IVA</th>
               <th>Delegación wsfe</th>
-              <th>Actions</th>
+              <th>Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -41,7 +45,7 @@ export default async function ClientsPage() {
                 <td>{c.cuit}</td>
                 <td>{c.ptoVta}</td>
                 <td>{c.condicionIva}</td>
-                <td>{c.delegationEnabled ? "Enabled" : "Disabled"}</td>
+                <td><span className={`status-pill ${c.delegationEnabled ? "status-ready" : "status-muted"}`}>{c.delegationEnabled ? "Activa" : "No configurada"}</span></td>
                 <td>
                   <ClientActions
                     clientId={c.id}
@@ -50,6 +54,8 @@ export default async function ClientsPage() {
                     ptoVta={c.ptoVta}
                     condicionIva={c.condicionIva}
                     delegationEnabled={c.delegationEnabled}
+                    fingerprint={certificate?.fingerprint ?? null}
+                    homologationEnabled={homologationEnabled}
                   />
                 </td>
               </tr>
@@ -57,6 +63,8 @@ export default async function ClientsPage() {
           </tbody>
         </table>
       )}
+      <p className="helper-note">La delegación local registra tu configuración, pero no otorga permisos en ARCA. La autorización debe gestionarse por separado en ARCA.</p>
+      </section>
     </main>
   );
 }

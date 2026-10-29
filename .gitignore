@@ -26,6 +26,7 @@ yarn.lock
 
 # demo output (generated PDFs/Excel from `pnpm demo`)
 /demo-output/
+/.data/
 
 # env files (keep the example committed)
 .env*

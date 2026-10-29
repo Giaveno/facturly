@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import React, { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import PointsOfSaleAction from "./points-of-sale-action";
 
 interface ClientActionsProps {
   clientId: string;
@@ -10,6 +11,8 @@ interface ClientActionsProps {
   ptoVta: number;
   condicionIva: string;
   delegationEnabled: boolean;
+  fingerprint: string | null;
+  homologationEnabled: boolean;
 }
 
 const CONDICIONES: Array<[string, string]> = [
@@ -26,8 +29,10 @@ export default function ClientActions(props: ClientActionsProps) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState("");
+  const [verificationVersion, setVerificationVersion] = useState(0);
 
   async function toggleDelegation() {
+    setVerificationVersion(v => v + 1);
     setMessage("");
     const res = await fetch(`/api/clients/${props.clientId}/delegation`, {
       method: "POST",
@@ -35,7 +40,7 @@ export default function ClientActions(props: ClientActionsProps) {
       body: JSON.stringify({ enabled: !props.delegationEnabled }),
     });
     if (!res.ok) {
-      setMessage("Failed to update delegation");
+      setMessage("No se pudo actualizar la delegación.");
       return;
     }
     router.refresh();
@@ -43,6 +48,7 @@ export default function ClientActions(props: ClientActionsProps) {
 
   async function onEdit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    setVerificationVersion(v => v + 1);
     setMessage("");
     const data = new FormData(e.currentTarget);
     const payload = {
@@ -58,7 +64,7 @@ export default function ClientActions(props: ClientActionsProps) {
     });
     if (!res.ok) {
       const json = (await res.json()) as { error?: string };
-      setMessage(json.error ?? "Failed to update client");
+      setMessage(json.error ?? "No se pudo actualizar el cliente.");
       return;
     }
     setEditing(false);
@@ -66,18 +72,18 @@ export default function ClientActions(props: ClientActionsProps) {
   }
 
   return (
-    <span>
+    <div>
       <button type="button" onClick={toggleDelegation}>
-        {props.delegationEnabled ? "Disable wsfe" : "Enable wsfe"}
+        {props.delegationEnabled ? "Desactivar delegación" : "Registrar delegación"}
       </button>{" "}
-      <button type="button" onClick={() => setEditing((v) => !v)}>
-        {editing ? "Cancel" : "Edit"}
+      <button type="button" onClick={() => { setVerificationVersion(v => v + 1); setEditing(v => !v); }}>
+        {editing ? "Cancelar" : "Editar"}
       </button>
       {editing ? (
-        <form onSubmit={onEdit}>
+        <form onSubmit={onEdit} onChange={() => setVerificationVersion(v => v + 1)}>
           <input name="razonSocial" defaultValue={props.razonSocial} required />
           <input name="cuit" defaultValue={props.cuit} required />
-          <input name="ptoVta" type="number" min={1} max={9999} defaultValue={props.ptoVta} required />
+          <input name="ptoVta" type="number" min={1} max={99998} defaultValue={props.ptoVta} required />
           <select name="condicionIva" defaultValue={props.condicionIva}>
             {CONDICIONES.map(([value, label]) => (
               <option key={value} value={value}>
@@ -85,10 +91,17 @@ export default function ClientActions(props: ClientActionsProps) {
               </option>
             ))}
           </select>
-          <button type="submit">Save</button>
+          <button type="submit">Guardar cambios</button>
         </form>
       ) : null}
-      {message ? <span> {message}</span> : null}
-    </span>
+      {message ? <span role="status"> {message}</span> : null}
+      <PointsOfSaleAction
+        key={JSON.stringify([props, verificationVersion])}
+        client={{ id: props.clientId, cuit: props.cuit, ptoVta: props.ptoVta, razonSocial: props.razonSocial, condicionIva: props.condicionIva }}
+        fingerprint={props.fingerprint}
+        enabled={props.homologationEnabled}
+        editing={editing}
+      />
+    </div>
   );
 }

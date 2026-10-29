@@ -3,13 +3,13 @@
  * registry, shared by the synchronous (`processUpload`) and asynchronous
  * (`processOcrRow`) ingest paths.
  *
- * A valid CUIT the OCR itself extracted ALWAYS wins — the registry must never
- * override it. When the image carries no CUIT (the common bank-transfer case),
- * the registry read side tries to resolve one from CBU/CVU/alias/name. If it
- * cannot decide, the CUIT stays absent and the row remains flagged for review.
+ * Direct OCR evidence is retained without selecting a recipient mode. Anonymous
+ * extraction never consults the registry. Only an explicitly identified legacy
+ * pending row may fall back to registry evidence when OCR has no valid CUIT.
  */
 
 import { isValidCuit } from "@/domain/cuit";
+import type { RecipientMode } from "@/domain/receipt";
 import {
   resolvePayerCuitFromRegistry,
   type PayerMatchKey,
@@ -25,18 +25,22 @@ export interface ResolvedRowCuit {
 }
 
 /**
- * Decides a row's CUIT from an OCR result, falling back to the registry when the
- * image carries no valid CUIT. Pure read (no row write, no audit) — the caller
+ * Decides CUIT evidence, with registry fallback only in identified mode.
+ * Pure read (no row write, no audit) — the caller
  * persists the CUIT and records the audit entry.
  */
 export async function resolveRowCuit(
   db: Db,
   result: OcrExtractResult,
+  recipientMode: RecipientMode = "consumer_final",
 ): Promise<ResolvedRowCuit> {
   const ocrCuit = result.cuit && isValidCuit(result.cuit) ? result.cuit : null;
   if (ocrCuit) {
     return { cuit: ocrCuit, cuitSource: "ocr", matchedBy: null };
   }
+  // Anonymous mode may retain direct OCR evidence, never infer a fiscal
+  // identifier through registry matching (or produce a resolution audit).
+  if (recipientMode === "consumer_final") return {cuit:null,cuitSource:null,matchedBy:null};
 
   const resolved = await resolvePayerCuitFromRegistry(db, {
     name: result.fields.name,

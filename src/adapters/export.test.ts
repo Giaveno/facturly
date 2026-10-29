@@ -48,6 +48,7 @@ describe("export — Excel fidelity (centavo-derived values, not floats)", () =>
       Client: "EMISOR S.A.",
       Payer: "ACME S.A.",
       CUIT: "20123456786",
+      "Document Type":80,"Document Number":20123456786,
       Amount: 1210, // numeric pesos (centavos / 100) — Excel can SUM it
       Date: "2026-09-22",
       Status: "EMITTED",
@@ -56,6 +57,7 @@ describe("export — Excel fidelity (centavo-derived values, not floats)", () =>
       Client: "EMISOR S.A.",
       Payer: "PAGOS DELTA SRL",
       CUIT: "",
+      "Document Type":99,"Document Number":0,
       Amount: 55,
       Date: "2026-09-21",
       Status: "REVIEWED",

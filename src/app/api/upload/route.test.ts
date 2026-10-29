@@ -10,6 +10,11 @@ vi.mock("@/lib/auth/session", async (importOriginal) => {
 vi.mock("@/lib/db/client", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/pipeline/ingest", () => ({ queueUpload: vi.fn() }));
 vi.mock("@/lib/inngest/client", () => ({ inngest: { send: vi.fn() } }));
+const storagePut = vi.fn();
+const storageDelete = vi.fn();
+vi.mock("@/adapters/storage/local-receipt-storage", () => ({
+  LocalReceiptStorage: class { put = storagePut; delete = storageDelete; get = vi.fn(); },
+}));
 
 import {
   requireAccountantSession,
@@ -70,5 +75,25 @@ describe("upload route — server-side auth (W1) + same-origin (W2)", () => {
     // NOT 403 — the origin gate passed; the next gate (auth) denied.
     expect(res.status).toBe(401);
     expect(requireAccountantSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves committed rows and files when event dispatch fails", async () => {
+    vi.mocked(requireAccountantSession).mockImplementation(async () => {});
+    vi.mocked(queueUpload).mockResolvedValue({
+      batchId: "batch-1", clientId: "550e8400-e29b-41d4-a716-446655440000",
+      rows: [{ id: "row-1", status: "PENDING", cuit: null }, { id: "row-2", status: "PENDING", cuit: null }],
+    });
+    vi.mocked(inngest.send).mockResolvedValueOnce({} as never).mockRejectedValueOnce(new Error("private path"));
+    const form = new FormData();
+    form.set("clientId", "550e8400-e29b-41d4-a716-446655440000");
+    form.append("photos", new File([new Uint8Array([0xff, 0xd8, 0xff, 1])], "receipt.jpg", { type: "image/jpeg" }));
+    form.append("photos", new File([new Uint8Array([0xff, 0xd8, 0xff, 2])], "receipt-2.jpg", { type: "image/jpeg" }));
+    const req = new Request("http://app.example.com/api/upload", { method: "POST", headers: { host: "app.example.com" }, body: form });
+
+    const res = await uploadPOST(req);
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/saved/i);
+    expect(storageDelete).not.toHaveBeenCalled();
+    expect(queueUpload).toHaveBeenCalledTimes(1);
   });
 });

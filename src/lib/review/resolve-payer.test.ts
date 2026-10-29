@@ -83,7 +83,7 @@ describe("resolvePayerCuit — unblocks flagged rows", () => {
     const result = await resolvePayerCuit(db, rowId, "30710145764");
 
     expect(result.status).toBe("CORRECTED");
-    expect(result.invoiceStatus).toBe("REVIEWED");
+    expect(result.invoiceStatus).toBe("PENDING");
     expect(result.inserted).toBe(true);
     expect(result.learnedFrom).toBe("manual");
 
@@ -123,7 +123,7 @@ describe("resolvePayerCuit — unblocks flagged rows", () => {
 
     // The invoice was materialized (or re-synced) to REVIEWED — approvable.
     const [invoice] = await db.select().from(invoices).where(eq(invoices.ocrRowId, rowId));
-    expect(invoice!.status).toBe("REVIEWED");
+    expect(invoice!.status).toBe("PENDING");
     expect(result.invoiceId).toBe(invoice!.id);
   });
 

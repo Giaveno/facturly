@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   ArcaAuthError,
   ArcaBusinessError,
@@ -84,7 +84,8 @@ describe("http — createFetchTransport", () => {
     const t = transportWith(500, body);
     const err = await t.post("https://x", "", {}).catch((e) => e);
     expect(err).toBeInstanceOf(ArcaBusinessError);
-    expect((err as ArcaBusinessError).faultstring).toBe("bad request");
+    expect((err as ArcaBusinessError).category).toBe("soap-fault");
+    expect((err as ArcaBusinessError).faultstring).toBeUndefined();
   });
 
   it("surfaces a SOAP Fault arriving as HTTP 200 (not silently mapped to success)", async () => {
@@ -95,6 +96,24 @@ describe("http — createFetchTransport", () => {
 
   it("passes through an empty body on 200 without error", async () => {
     await expect(transportWith(200, "").post("https://x", "", {})).resolves.toBe("");
+  });
+
+  it("never logs or exposes arbitrary SOAP Fault text or network exception messages", async () => {
+    const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
+    for (const status of [200, 500]) {
+      const t = createFetchTransport({ logger, fetchFn: (async () => response(status, "<Envelope><Body><Fault><faultcode>Client</faultcode><faultstring>SECRET_TOKEN_KEY</faultstring></Fault></Body></Envelope>")) as typeof fetch });
+      const failure = await t.post("https://offline.invalid", "", {}).catch(e => e);
+      expect(JSON.stringify(failure)).not.toContain("SECRET");
+      expect(String(failure)).not.toContain("SECRET");
+    }
+    const t = createFetchTransport({ logger, fetchFn: async () => { throw new Error("SECRET_NETWORK"); } });
+    await t.post("https://offline.invalid", "", {}).catch(() => undefined);
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain("SECRET");
+  });
+  it("rejects oversized and entity-containing SOAP before parsing faults", async () => {
+    for (const body of ["x".repeat(1_048_577), '<!DOCTYPE x [<!ENTITY secret "SECRET">]><Envelope/>']) {
+      await expect(transportWith(200, body).post("https://offline.invalid", "", {})).rejects.toBeInstanceOf(ArcaBusinessError);
+    }
   });
 
   it("aborts a never-resolving fetch with a typed timeout error", async () => {

@@ -82,6 +82,7 @@ describe("credentials route — security + pair validation", () => {
     vi.mocked(requireAccountantSession).mockImplementation(async () => {});
     vi.mocked(getDb).mockReturnValue({} as never);
     vi.mocked(saveCredentials).mockResolvedValue({
+      fingerprint: "a".repeat(64),
       subjectCn: "ESTUDIO S.A.",
       cuit: "30710145764",
       notBefore: "Oct  4 00:00:00 2026 GMT",
@@ -109,7 +110,7 @@ describe("credentials route — security + pair validation", () => {
   it("never logs the private key, even on an unexpected failure (W5)", async () => {
     vi.mocked(requireAccountantSession).mockImplementation(async () => {});
     vi.mocked(getDb).mockReturnValue({} as never);
-    vi.mocked(saveCredentials).mockRejectedValue(new Error("boom"));
+    vi.mocked(saveCredentials).mockRejectedValue(new Error("PRIVATE KEY SECRETKEYMATERIAL raw remote payload"));
 
     const KEY = "-----BEGIN PRIVATE KEY-----\nSECRETKEYMATERIAL\n-----END PRIVATE KEY-----";
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -122,6 +123,8 @@ describe("credentials route — security + pair validation", () => {
         .join("\n");
       expect(logged).not.toContain(KEY);
       expect(logged).not.toContain("BEGIN PRIVATE KEY");
+      expect(logged).not.toContain("SECRETKEYMATERIAL");
+      expect(logged).not.toContain("raw remote payload");
     } finally {
       spy.mockRestore();
     }

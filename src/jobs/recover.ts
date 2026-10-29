@@ -33,11 +33,16 @@ export const recoverStuckEmissionsJob = inngest.createFunction(
     retries: 3,
   },
   async ({ step }) => {
+    const emissionsEnabled = readEmissionsEnabled();
+    if (!emissionsEnabled) {
+      return { recovered: 0, skipped: true, reason: "emissions-disabled" };
+    }
+
     const results = await step.run("recover-stuck", () =>
       recoverStuckEmissions({
         db: getDb(),
         gateway: buildArcaGateway(getDb()),
-        emissionsEnabled: readEmissionsEnabled(),
+        emissionsEnabled,
         delayMs: 1000,
       }),
     );

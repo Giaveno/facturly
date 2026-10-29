@@ -19,13 +19,13 @@ import {
   WSAA_PRODUCTION_URL,
   WSFE_HOMOLOGACION_URL,
   WSFE_PRODUCTION_URL,
-  type ArcaEnvironment,
 } from "@/adapters/arca/constants";
 import {
   DrizzleCredentialsRepository,
   credentialsProvider,
 } from "@/lib/db/credentials-repository";
 import { DrizzleTaCacheStore } from "@/lib/db/ta-cache-store";
+import { resolveArcaEnvironment } from "./environment";
 import { readEmissionsEnabled } from "@/adapters/arca/emissions";
 import {
   createConsoleLogger,
@@ -42,8 +42,7 @@ export function buildArcaGateway(
   db: Db,
   env: Record<string, string | undefined> = process.env,
 ): ArcaGateway {
-  const arcaEnv: ArcaEnvironment =
-    env.ARCA_ENV === "production" ? "production" : "homologacion";
+  const arcaEnv = resolveArcaEnvironment(env);
   const aesKey = env.AES_KEY ?? "";
   if (aesKey.trim() === "") {
     throw new Error("AES_KEY is not set — cannot decrypt the ARCA private key");

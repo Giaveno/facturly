@@ -12,6 +12,8 @@ import {
   assertSameOrigin,
   isForbiddenOriginError,
 } from "@/lib/auth/origin";
+import { parseApprovalSnapshot } from "@/domain/approval-snapshot";
+import { resolveArcaEnvironment } from "@/lib/emission/environment";
 import { inngest } from "@/lib/inngest/client";
 
 function errorJson(status: number, message: string, correlationId: string) {
@@ -64,9 +66,12 @@ export async function POST(
     throw err;
   }
 
+  let expected;
+  try { const body = await req.json(); expected = parseApprovalSnapshot(body?.expected); }
+  catch { return errorJson(400,"Se requiere confirmar los datos actuales del comprobante.",correlationId); }
   try {
     const db = getDb();
-    const approved = await approveInvoice(db, buildArcaGateway(db), id);
+    const approved = await approveInvoice(db, buildArcaGateway(db), id, undefined, expected, resolveArcaEnvironment(process.env));
     // C4: trigger the (async) emission of the just-approved invoice. The
     // idempotencyKey = invoiceId so a duplicate event is deduped by Inngest.
     await inngest.send({
@@ -76,7 +81,7 @@ export async function POST(
     return NextResponse.json({ id: approved.id, status: approved.status });
   } catch (err) {
     if (err instanceof InvoiceStateError) {
-      return errorJson(409, "Invoice is not in an approvable state", correlationId);
+      return errorJson(409, err.publicMessage ?? "Invoice is not in an approvable state", correlationId);
     }
     console.error(`[approve] ${correlationId} failed`, err);
     return errorJson(500, "Approval failed", correlationId);

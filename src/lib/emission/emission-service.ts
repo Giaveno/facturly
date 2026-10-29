@@ -50,13 +50,20 @@ import type {
   IssueInvoiceResult,
 } from "@/ports/arca-gateway";
 import type { CbteTipo } from "@/domain/policy";
+import { deriveAmounts } from "@/domain/amounts";
+import { ANONYMOUS_IDENTIFICATION_THRESHOLD_CENTS } from "@/domain/receipt";
+import { createApprovalSnapshot, matchesApprovalSnapshot } from "@/domain/approval-snapshot";
+import { resolveArcaEnvironment } from "./environment";
 import type { Db } from "@/lib/db/types";
 import {
   ArcaAuthError,
   ArcaBusinessError,
   ArcaError,
   ArcaTransientError,
+  safeEmissionError,
+  type EmissionStage,
 } from "@/adapters/arca/errors";
+import type { QueryCategory } from "@/adapters/arca/query-diagnostics";
 import {
   noopLogger,
   noopMetrics,
@@ -90,6 +97,7 @@ export interface EmissionDeps {
   gateway: ArcaGateway;
   /** Master kill switch (job reads EMISSIONS_ENABLED). Default false — safe. */
   emissionsEnabled: boolean;
+  environment?: "production" | "homologacion";
   /** Inter-call delay in ms; injectable so tests never sleep. Default 0 in tests. */
   delayMs?: number;
   logger?: ArcaLogger;
@@ -119,6 +127,10 @@ export interface EmissionBatchResult {
   cae?: string;
   error?: string;
   arcaCode?: string;
+  stage?: EmissionStage;
+  category?: QueryCategory;
+  providerCodes?: number[];
+  httpStatus?: number;
 }
 
 /**
@@ -148,7 +160,15 @@ export class NumberAllocator {
     }
     // First number for this key: seed from BOTH ARCA and our local max, then
     // increment locally (W3 — a stale reservation must not be re-allocated).
-    const arcaLast = await this.gateway.ultimoAutorizado(cuit, ptoVta, cbteTipo);
+    let arcaLast: number;
+    try {
+      arcaLast = await this.gateway.ultimoAutorizado(cuit, ptoVta, cbteTipo);
+    } catch (err) {
+      throw safeEmissionError(err, "ultimo");
+    }
+    if (!Number.isInteger(arcaLast) || arcaLast < 0 || arcaLast > 99_999_999) {
+      throw new ArcaBusinessError("ARCA ultimo failed (malformed-response)", { stage: "ultimo", category: "malformed-response" });
+    }
     const localLast = this.localMax
       ? await this.localMax(cuit, ptoVta, cbteTipo)
       : 0;
@@ -179,6 +199,7 @@ export function buildFecaReq(
     cotizacion: invoice.cotizacion ?? 1,
     importeNeto: invoice.importeNetoCentavos ?? 0,
     importeIva: invoice.importeIvaCentavos ?? 0,
+    taxRate: invoice.taxRate,
     importeTotal: invoice.importeTotalCentavos ?? 0,
   };
 }
@@ -274,12 +295,28 @@ export async function emitInvoice(
       `Invoice ${invoiceId} has status "${invoice.status}" — not emittable`,
     );
   }
+  if (invoice.approvalSnapshot && !matchesApprovalSnapshot(invoice.approvalSnapshot,createApprovalSnapshot(row,client,deps.environment ?? resolveArcaEnvironment(process.env)))) {
+    throw new EmissionError("Approval snapshot changed; refusing to reserve or emit");
+  }
 
   const cbteTipo = invoice.cbteTipo;
   if (cbteTipo !== 1 && cbteTipo !== 6 && cbteTipo !== 11) {
     throw new EmissionError(
       `Invoice ${invoiceId} is not fully materialized (cbteTipo=${cbteTipo})`,
     );
+  }
+  if (invoice.receptorDocTipo === 99 && ((invoice.importeTotalCentavos ?? 0) >= ANONYMOUS_IDENTIFICATION_THRESHOLD_CENTS || invoice.receptorDocNro !== 0 || invoice.condicionIvaReceptorId !== 5)) {
+    throw new EmissionError("Anonymous recipient identification policy requires manual remediation");
+  }
+  // Legacy taxable approvals without reviewed rate evidence must not reserve
+  // a number or contact ARCA. Never guess A's old implicit 21% during recovery.
+  if (cbteTipo === 1 || cbteTipo === 6) {
+    if (invoice.taxRate === null) throw new EmissionError("Taxable IVA rate is missing; manual fiscal remediation is required before emission/recovery");
+    const amounts = deriveAmounts(invoice.importeTotalCentavos ?? 0, cbteTipo, invoice.taxRate);
+    if (amounts.net !== invoice.importeNetoCentavos || amounts.iva !== invoice.importeIvaCentavos) throw new EmissionError("A/B requires reviewed taxable IVA treatment before emission/recovery");
+  }
+  if (cbteTipo === 11 && (invoice.importeIvaCentavos !== 0 || invoice.importeNetoCentavos !== invoice.importeTotalCentavos)) {
+    throw new EmissionError("Factura C cannot include IVA");
   }
 
   // 4.D — per-client delegation authorization.
@@ -350,7 +387,8 @@ export async function emitInvoice(
   let result: IssueInvoiceResult;
   try {
     result = await gateway.issueInvoice(buildFecaReq(invoice, client, cbteNro));
-  } catch (err) {
+  } catch (rawError) {
+    const err = rawError instanceof EmissionError ? rawError : safeEmissionError(rawError, "issuance");
     const duration = Date.now() - started;
     const permanent = isPermanentFailure(err);
     const code = err instanceof ArcaError ? err.code : undefined;
@@ -473,11 +511,16 @@ function failureOf(id: string, err: unknown): EmissionBatchResult {
       : isPermanentFailure(err)
         ? "failed_permanent"
         : "failed_transient";
+  const safe = err instanceof ArcaError ? safeEmissionError(err, err.stage ?? "issuance") : undefined;
   return {
     invoiceId: id,
     outcome,
-    error: err instanceof Error ? err.message : String(err),
-    arcaCode: err instanceof ArcaError ? err.code : undefined,
+    error: safe?.message ?? (err instanceof EmissionError || err instanceof RowNotEmittableError || err instanceof InvoiceStateError ? err.message : "Emission failed (internal)"),
+    arcaCode: safe?.code,
+    stage: safe?.stage,
+    category: safe?.category,
+    providerCodes: safe?.providerCodes,
+    httpStatus: safe?.httpStatus,
   };
 }
 

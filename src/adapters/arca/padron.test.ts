@@ -1,3 +1,4 @@
+import { ArcaQueryError } from "./query-diagnostics";
 import { describe, it, expect } from "vitest";
 import {
   buildGetPersonaEnvelope,
@@ -163,13 +164,13 @@ describe("padron — PadronA5Client.getPersona (offline)", () => {
         return `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
   <soapenv:Body>
-    <ns2:getPersonaResponse xmlns:ns2="http://a5.soap.ws.server.puc.sr/">
+    <ns2:getPersona_v2Response xmlns:ns2="http://a5.soap.ws.server.puc.sr/">
       <personaReturn>
-        <idPersona>30710145764</idPersona>
-        <datosRegimenGeneral><impuesto>30</impuesto></datosRegimenGeneral>
+        <datosGenerales><idPersona>30710145764</idPersona></datosGenerales>
+        <datosRegimenGeneral><impuesto><idImpuesto>30</idImpuesto><estadoImpuesto>AC</estadoImpuesto></impuesto></datosRegimenGeneral>
         <impuestos><impuesto><idImpuesto>30</idImpuesto></impuesto></impuestos>
       </personaReturn>
-    </ns2:getPersonaResponse>
+    </ns2:getPersona_v2Response>
   </soapenv:Body>
 </soapenv:Envelope>`;
       },
@@ -195,9 +196,9 @@ describe("padron — PadronA5Client.getPersona (offline)", () => {
         return `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
   <soapenv:Body>
-    <ns2:getPersonaResponse xmlns:ns2="http://a5.soap.ws.server.puc.sr/">
+    <ns2:getPersona_v2Response xmlns:ns2="http://a5.soap.ws.server.puc.sr/">
       <personaReturn><errorConstancia>No existe la persona</errorConstancia></personaReturn>
-    </ns2:getPersonaResponse>
+    </ns2:getPersona_v2Response>
   </soapenv:Body>
 </soapenv:Envelope>`;
       },
@@ -205,6 +206,6 @@ describe("padron — PadronA5Client.getPersona (offline)", () => {
     const client = new PadronA5Client({ url: "https://x", transport });
     await expect(
       client.getPersona("TOKEN", "SIGN", "20123456786", "99999999999"),
-    ).rejects.toThrow(ArcaBusinessError);
+    ).rejects.toThrow(ArcaQueryError);
   });
 });

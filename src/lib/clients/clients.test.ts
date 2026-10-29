@@ -27,6 +27,9 @@ describe("validateClientInput (pure)", () => {
     expect(out.condicionIva).toBe("ri");
   });
 
+  it("accepts five-digit WSFE points up to 99998 without truncation", () => {
+    expect(validateClientInput({ razonSocial: "X", cuit: "30710145764", ptoVta: 99998, condicionIva: "ri" }).ptoVta).toBe(99998);
+  });
   it("accepts a numeric-string ptoVta", () => {
     expect(validateClientInput({ razonSocial: "X", cuit: "30710145764", ptoVta: "3", condicionIva: "exento" }).ptoVta).toBe(3);
   });

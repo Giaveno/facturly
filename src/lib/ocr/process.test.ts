@@ -141,7 +141,7 @@ describe("async OCR — moves OCR off the request path (PENDING → CONFIDENT/BL
     expect(row!.error).toContain("crashed");
   });
 
-  it("resolves a known payer's CUIT from the registry when OCR extracts none", async () => {
+  it("resolves registry evidence only for an explicitly identified legacy pending row", async () => {
     // The registry already knows PAGOS DELTA by CVU (from a past correction).
     await db.insert(payers).values({
       name: "PAGOS DELTA",
@@ -151,6 +151,7 @@ describe("async OCR — moves OCR off the request path (PENDING → CONFIDENT/BL
     });
 
     const rowId = await seedPendingRow();
+    await db.update(ocrRows).set({recipientMode:"identified",recipientModeSource:"legacy_migration"}).where(eq(ocrRows.id,rowId));
     const result = await processOcrRow(
       db,
       new OcrFake(),

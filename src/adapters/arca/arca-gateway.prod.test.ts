@@ -1,3 +1,4 @@
+import { ArcaQueryError } from "./query-diagnostics";
 import { describe, it, expect } from "vitest";
 import { ArcaGatewayProd, createArcaGatewayProd, certFingerprint } from "./arca-gateway.prod";
 import { TaCache, type TaCacheStore, type WsaaProvider } from "./ta-cache";
@@ -45,7 +46,7 @@ function wsfeTransport() {
     async post(_url, body) {
       if (body.includes("<ar:FECompConsultar>")) {
         ops.push("consultarComprobante");
-        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECompConsultarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECompConsultarResult><ResultGet><CbteDesde>7</CbteDesde><Resultado>A</Resultado><CodAutorizacion>70212345678902</CodAutorizacion><FchVto>20261002</FchVto></ResultGet></FECompConsultarResult></FECompConsultarResponse></soap:Body></soap:Envelope>`;
+        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECompConsultarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECompConsultarResult><ResultGet><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>A</Resultado><CodAutorizacion>70212345678902</CodAutorizacion><FchVto>20261002</FchVto><EmisionTipo>CAE</EmisionTipo><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><DocTipo>80</DocTipo><DocNro>30710145764</DocNro><ImpTotal>1210.00</ImpTotal><ImpNeto>1000.00</ImpNeto><ImpIVA>210.00</ImpIVA><MonId>PES</MonId><MonCotiz>1</MonCotiz></ResultGet></FECompConsultarResult></FECompConsultarResponse></soap:Body></soap:Envelope>`;
       }
       ops.push("solicitar");
       return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>A</Resultado><Reproceso>N</Reproceso></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>A</Resultado><CAE>70212345678901</CAE><CAEFchVto>20261002</CAEFchVto></FECAEDetResponse></FeDetResp></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
@@ -60,13 +61,14 @@ function padronTransport() {
   const transport: PadronTransport = {
     async post(_url, body) {
       bodies.push(body);
-      return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns2:getPersonaResponse xmlns:ns2="http://a5.soap.ws.server.puc.sr/"><personaReturn><idPersona>30710145764</idPersona><datosRegimenGeneral><impuesto>30</impuesto></datosRegimenGeneral><impuestos><impuesto><idImpuesto>30</idImpuesto></impuesto></impuestos></personaReturn></ns2:getPersonaResponse></soap:Body></soap:Envelope>`;
+      return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns2:getPersona_v2Response xmlns:ns2="http://a5.soap.ws.server.puc.sr/"><personaReturn><datosGenerales><idPersona>30710145764</idPersona></datosGenerales><datosRegimenGeneral><impuesto><idImpuesto>30</idImpuesto><estadoImpuesto>AC</estadoImpuesto></impuesto></datosRegimenGeneral><impuestos><impuesto><idImpuesto>30</idImpuesto></impuesto></impuestos></personaReturn></ns2:getPersona_v2Response></soap:Body></soap:Envelope>`;
     },
   };
   return { transport, bodies };
 }
 
 const REQ: FECAEReq = {
+  taxRate:21,
   cuit: "20123456786",
   ptoVta: 1,
   cbteTipo: 1,
@@ -107,6 +109,52 @@ function makeGateway() {
 }
 
 describe("arca-gateway.prod — composed ARCA gateway", () => {
+  it.each(["600", "10016", "10015"])("retains Errors-only %s taxonomy without inventing rejection or duplicate evidence", async code => {
+    const base = wsfeTransport(); let issued = 0; let consulted = 0;
+    const transport: WsfeTransport = { async post(url, body, headers) {
+      if (body.includes("<ar:FECompConsultar>")) { consulted++; return base.transport.post(url,body,headers); }
+      issued++;
+      if (issued === 1) return `<Envelope><Body><FECAESolicitarResponse><FECAESolicitarResult><Errors><Err><Code>${code}</Code><Msg>SECRET_TOKEN</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></Body></Envelope>`;
+      return base.transport.post(url,body,headers);
+    } };
+    const gateway = new ArcaGatewayProd({ taCache: new TaCache({ wsaa: fakeWsaa().wsaa, store: inMemoryStore(), clock: () => FIXED_NOW }), wsfe: new WsfeClient({ url: "offline", transport }), padron: new PadronA5Client({ url: "offline", transport: padronTransport().transport }), emissionsEnabled: true });
+    if (code === "10015") await expect(gateway.issueInvoice(REQ)).rejects.toMatchObject({ kind:"business", code:"10015", category:"provider-errors" });
+    else expect(await gateway.issueInvoice(REQ)).toMatchObject({cae:expect.stringMatching(/^\d{14}$/),cbteNro:7});
+    expect(issued).toBe(code === "600" ? 2 : 1); expect(consulted).toBe(code === "10016" ? 1 : 0);
+  });
+  it("holds malformed consulted fiscal evidence as terminal uncertain, not a transient emission error", async () => {
+    const transport: WsfeTransport = { async post(_url,body) { return body.includes("<ar:FECompConsultar>") ? "<Envelope/>" : `<Envelope><Body><FECAESolicitarResponse><FECAESolicitarResult><Errors><Err><Code>10016</Code></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></Body></Envelope>`; } };
+    const gateway = new ArcaGatewayProd({taCache:new TaCache({wsaa:fakeWsaa().wsaa,store:inMemoryStore(),clock:()=>FIXED_NOW}),wsfe:new WsfeClient({url:"offline",transport}),padron:new PadronA5Client({url:"offline",transport:padronTransport().transport}),emissionsEnabled:true});
+    await expect(gateway.issueInvoice(REQ)).rejects.toMatchObject({kind:"business",stage:"issuance",category:"malformed-response"});
+  });
+  it.each(["CAEA", "wrong-number", "missing-total", "wrong-currency"])("does not recover a CAE from %s evidence", async kind => {
+    const base = wsfeTransport();
+    const transport: WsfeTransport = { async post(url, body, headers) {
+      if (body.includes("<ar:FECAESolicitar>")) return (await base.transport.post(url, body, headers)).replaceAll("<Resultado>A</Resultado>", "<Resultado>R</Resultado>").replace(/<CAE>.*?<\/CAE>/, "").replace(/<CAEFchVto>.*?<\/CAEFchVto>/, "").replace("</FECAEDetResponse>", "<Observaciones><Obs><Code>10016</Code></Obs></Observaciones></FECAEDetResponse>");
+      let response = await base.transport.post(url, body, headers);
+      if (kind === "CAEA") response = response.replace("<EmisionTipo>CAE", "<EmisionTipo>CAEA");
+      if (kind === "wrong-number") response = response.replaceAll(">7<", ">8<");
+      if (kind === "missing-total") response = response.replace("<ImpTotal>1210.00</ImpTotal>", "");
+      if (kind === "wrong-currency") response = response.replace("<MonId>PES", "<MonId>DOL");
+      return response;
+    } };
+    const gateway = new ArcaGatewayProd({ taCache: new TaCache({ wsaa: fakeWsaa().wsaa, store: inMemoryStore(), clock: () => FIXED_NOW }), wsfe: new WsfeClient({ url: "offline", transport }), padron: new PadronA5Client({ url: "offline", transport: padronTransport().transport }), emissionsEnabled: true });
+    await expect(gateway.issueInvoice(REQ)).rejects.toBeInstanceOf(ArcaBusinessError);
+  });
+  it("retains safe issuance rejection code without logging provider text", async () => {
+    const { wsaa } = fakeWsaa();
+    const logger = { error: (event: string, fields: unknown) => logs.push([event, fields]), warn: () => {}, info: () => {} };
+    const logs: unknown[] = [];
+    const gateway = new ArcaGatewayProd({
+      taCache: new TaCache({ wsaa, store: inMemoryStore(), clock: () => FIXED_NOW }),
+      wsfe: new WsfeClient({ url: "https://offline.invalid", transport: { post: async () => "<Envelope><Body><FECAESolicitarResponse><FECAESolicitarResult><Errors><Err><Code>10049</Code><Msg>SECRET_TOKEN</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></Body></Envelope>" } }),
+      padron: new PadronA5Client({ url: "https://offline.invalid", transport: padronTransport().transport }),
+      logger, emissionsEnabled: true,
+    });
+    const failure = await gateway.issueInvoice(REQ).catch(e => e);
+    expect(failure).toMatchObject({ code: "10049", stage: "issuance", category: "provider-errors" });
+    expect(JSON.stringify(logs)).not.toContain("SECRET");
+  });
   it("getIvaCondition resolves via Padrón A5 with the per-call clientCuit as cuitRepresentada", async () => {
     const { gateway, calls, bodies } = makeGateway();
     const condicion = await gateway.getIvaCondition("20123456786", "30710145764");
@@ -132,7 +180,7 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
     const taCache = new TaCache({ wsaa, store: inMemoryStore(), clock: () => FIXED_NOW });
     const errTransport: PadronTransport = {
       async post() {
-        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns2:getPersonaResponse xmlns:ns2="http://a5.soap.ws.server.puc.sr/"><personaReturn><errorConstancia>No existe la persona o no esta autorizado</errorConstancia></personaReturn></ns2:getPersonaResponse></soap:Body></soap:Envelope>`;
+        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns2:getPersona_v2Response xmlns:ns2="http://a5.soap.ws.server.puc.sr/"><personaReturn><errorConstancia>No existe la persona o no esta autorizado</errorConstancia></personaReturn></ns2:getPersona_v2Response></soap:Body></soap:Envelope>`;
       },
     };
     const gateway = new ArcaGatewayProd({
@@ -143,7 +191,7 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
     });
     await expect(
       gateway.getIvaCondition("99999999999", "30710145764"),
-    ).rejects.toBeInstanceOf(ArcaBusinessError);
+    ).rejects.toBeInstanceOf(ArcaQueryError);
   });
 
   it("issueInvoice pins the CALLER-SUPPLIED cbteNro (no ultimoAutorizado derivation)", async () => {
@@ -156,15 +204,15 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
     expect(ops).toEqual(["solicitar"]);
   });
 
-  it("re-fetches the existing CAE on duplicate (10015 in BOTH errors and observaciones)", async () => {
+  it("re-fetches the existing CAE on duplicate (10016 in BOTH errors and observaciones)", async () => {
     const { wsaa } = fakeWsaa();
     const taCache = new TaCache({ wsaa, store: inMemoryStore(), clock: () => FIXED_NOW });
     const duplicateTransport: WsfeTransport = {
       async post(_url, body) {
         if (body.includes("<ar:FECompConsultar>")) {
-          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECompConsultarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECompConsultarResult><ResultGet><CbteDesde>7</CbteDesde><Resultado>A</Resultado><CodAutorizacion>70212345678902</CodAutorizacion><FchVto>20261002</FchVto></ResultGet></FECompConsultarResult></FECompConsultarResponse></soap:Body></soap:Envelope>`;
+          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECompConsultarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECompConsultarResult><ResultGet><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>A</Resultado><CodAutorizacion>70212345678902</CodAutorizacion><FchVto>20261002</FchVto><EmisionTipo>CAE</EmisionTipo><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><DocTipo>80</DocTipo><DocNro>30710145764</DocNro><ImpTotal>1210.00</ImpTotal><ImpNeto>1000.00</ImpNeto><ImpIVA>210.00</ImpIVA><MonId>PES</MonId><MonCotiz>1</MonCotiz></ResultGet></FECompConsultarResult></FECompConsultarResponse></soap:Body></soap:Envelope>`;
         }
-        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><Resultado>R</Resultado><Observaciones><Obs><Code>10015</Code><Msg>ya autorizado</Msg></Obs></Observaciones></FECAEDetResponse></FeDetResp><Errors><Err><Code>10015</Code><Msg>ya autorizado</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
+        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>R</Resultado><Observaciones><Obs><Code>10016</Code><Msg>ya autorizado</Msg></Obs></Observaciones></FECAEDetResponse></FeDetResp><Errors><Err><Code>10016</Code><Msg>ya autorizado</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
       },
     };
     const gateway = new ArcaGatewayProd({
@@ -184,10 +232,10 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
     const obsOnlyTransport: WsfeTransport = {
       async post(_url, body) {
         if (body.includes("<ar:FECompConsultar>")) {
-          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECompConsultarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECompConsultarResult><ResultGet><CbteDesde>7</CbteDesde><Resultado>A</Resultado><CodAutorizacion>70212345678902</CodAutorizacion><FchVto>20261002</FchVto></ResultGet></FECompConsultarResult></FECompConsultarResponse></soap:Body></soap:Envelope>`;
+          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECompConsultarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECompConsultarResult><ResultGet><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>A</Resultado><CodAutorizacion>70212345678902</CodAutorizacion><FchVto>20261002</FchVto><EmisionTipo>CAE</EmisionTipo><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><DocTipo>80</DocTipo><DocNro>30710145764</DocNro><ImpTotal>1210.00</ImpTotal><ImpNeto>1000.00</ImpNeto><ImpIVA>210.00</ImpIVA><MonId>PES</MonId><MonCotiz>1</MonCotiz></ResultGet></FECompConsultarResult></FECompConsultarResponse></soap:Body></soap:Envelope>`;
         }
         // 10016 in observaciones ONLY — Errors is empty (the gap C4 closes).
-        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><Resultado>R</Resultado><Observaciones><Obs><Code>10016</Code><Msg>ya autorizado</Msg></Obs></Observaciones></FECAEDetResponse></FeDetResp></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
+        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>R</Resultado><Observaciones><Obs><Code>10016</Code><Msg>ya autorizado</Msg></Obs></Observaciones></FECAEDetResponse></FeDetResp></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
       },
     };
     const metrics = createInMemoryMetrics();
@@ -210,10 +258,10 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
     const errorsOnlyTransport: WsfeTransport = {
       async post(_url, body) {
         if (body.includes("<ar:FECompConsultar>")) {
-          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECompConsultarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECompConsultarResult><ResultGet><CbteDesde>7</CbteDesde><Resultado>A</Resultado><CodAutorizacion>70212345678902</CodAutorizacion><FchVto>20261002</FchVto></ResultGet></FECompConsultarResult></FECompConsultarResponse></soap:Body></soap:Envelope>`;
+          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECompConsultarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECompConsultarResult><ResultGet><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>A</Resultado><CodAutorizacion>70212345678902</CodAutorizacion><FchVto>20261002</FchVto><EmisionTipo>CAE</EmisionTipo><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><DocTipo>80</DocTipo><DocNro>30710145764</DocNro><ImpTotal>1210.00</ImpTotal><ImpNeto>1000.00</ImpNeto><ImpIVA>210.00</ImpIVA><MonId>PES</MonId><MonCotiz>1</MonCotiz></ResultGet></FECompConsultarResult></FECompConsultarResponse></soap:Body></soap:Envelope>`;
         }
-        // 10015 in ERRORS ONLY — no Observaciones element at all (the C4 gap).
-        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><Resultado>R</Resultado></FECAEDetResponse></FeDetResp><Errors><Err><Code>10015</Code><Msg>ya autorizado</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
+        // 10016 in ERRORS ONLY — no Observaciones element at all (the C4 gap).
+        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>R</Resultado></FECAEDetResponse></FeDetResp><Errors><Err><Code>10016</Code><Msg>ya autorizado</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
       },
     };
     const metrics = createInMemoryMetrics();
@@ -232,7 +280,7 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
 
   it("a lost-response retry replays the SAME cbteNro and NEVER solicits a second number", async () => {
     // C1: the caller retries cbteNro=7 after the response was lost. ARCA (which
-    // already authorized 7) answers 10015; the gateway must recover the CAE via
+    // already authorized 7) answers 10016; the gateway must recover the CAE via
     // FECompConsultar WITHOUT a second FECAESolicitar for a different number.
     const { wsaa } = fakeWsaa();
     const taCache = new TaCache({ wsaa, store: inMemoryStore(), clock: () => FIXED_NOW });
@@ -241,11 +289,11 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
       async post(_url, body) {
         if (body.includes("<ar:FECompConsultar>")) {
           ops.push("consultarComprobante");
-          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECompConsultarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECompConsultarResult><ResultGet><CbteDesde>7</CbteDesde><Resultado>A</Resultado><CodAutorizacion>70212345678902</CodAutorizacion><FchVto>20261002</FchVto></ResultGet></FECompConsultarResult></FECompConsultarResponse></soap:Body></soap:Envelope>`;
+          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECompConsultarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECompConsultarResult><ResultGet><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>A</Resultado><CodAutorizacion>70212345678902</CodAutorizacion><FchVto>20261002</FchVto><EmisionTipo>CAE</EmisionTipo><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><DocTipo>80</DocTipo><DocNro>30710145764</DocNro><ImpTotal>1210.00</ImpTotal><ImpNeto>1000.00</ImpNeto><ImpIVA>210.00</ImpIVA><MonId>PES</MonId><MonCotiz>1</MonCotiz></ResultGet></FECompConsultarResult></FECompConsultarResponse></soap:Body></soap:Envelope>`;
         }
         ops.push(`solicitar`);
         // The emission was already authorized as number 7.
-        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><Resultado>R</Resultado><Observaciones><Obs><Code>10015</Code><Msg>ya autorizado</Msg></Obs></Observaciones></FECAEDetResponse></FeDetResp></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
+        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>R</Resultado><Observaciones><Obs><Code>10016</Code><Msg>ya autorizado</Msg></Obs></Observaciones></FECAEDetResponse></FeDetResp></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
       },
     };
     const gateway = new ArcaGatewayProd({
@@ -280,9 +328,9 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
         if (!body.includes("<ar:FECAESolicitar>")) return "";
         solicitarCount++;
         if (solicitarCount === 1) {
-          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><Resultado>R</Resultado></FECAEDetResponse></FeDetResp><Errors><Err><Code>600</Code><Msg>Token invalido</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
+          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>R</Resultado></FECAEDetResponse></FeDetResp><Errors><Err><Code>600</Code><Msg>Token invalido</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
         }
-        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>A</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><Resultado>A</Resultado><CAE>70212345678901</CAE><CAEFchVto>20261002</CAEFchVto></FECAEDetResponse></FeDetResp></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
+        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>A</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>A</Resultado><CAE>70212345678901</CAE><CAEFchVto>20261002</CAEFchVto></FECAEDetResponse></FeDetResp></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
       },
     };
     const metrics = createInMemoryMetrics();
@@ -306,7 +354,7 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
     const taCache = new TaCache({ wsaa, store: inMemoryStore(), clock: () => FIXED_NOW });
     const rejectingTransport: WsfeTransport = {
       async post() {
-        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><Resultado>R</Resultado></FECAEDetResponse></FeDetResp><Errors><Err><Code>10049</Code><Msg>Otro error</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
+        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>R</Resultado></FECAEDetResponse></FeDetResp><Errors><Err><Code>10049</Code><Msg>Otro error</Msg></Err></Errors></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
       },
     };
     const gateway = new ArcaGatewayProd({
@@ -324,7 +372,7 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
     const rWithCaeTransport: WsfeTransport = {
       async post() {
         // Resultado=R but a non-null CAE/CbteDesde — must NOT be accepted.
-        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><Resultado>R</Resultado><CAE>70212345678901</CAE><CAEFchVto>20261002</CAEFchVto></FECAEDetResponse></FeDetResp></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
+        return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><FECAESolicitarResponse xmlns="http://ar.gov.afip.dif.FEV1/"><FECAESolicitarResult><FeCabResp><Cuit>20123456786</Cuit><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><Resultado>R</Resultado></FeCabResp><FeDetResp><FECAEDetResponse><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><Resultado>R</Resultado><CAE>70212345678901</CAE><CAEFchVto>20261002</CAEFchVto></FECAEDetResponse></FeDetResp></FECAESolicitarResult></FECAESolicitarResponse></soap:Body></soap:Envelope>`;
       },
     };
     const gateway = new ArcaGatewayProd({
@@ -333,7 +381,7 @@ describe("arca-gateway.prod — composed ARCA gateway", () => {
       padron: new PadronA5Client({ url: "y", transport: padronTransport().transport }),
       emissionsEnabled: true,
     });
-    await expect(gateway.issueInvoice(REQ)).rejects.toThrow(/resultado=R/);
+    await expect(gateway.issueInvoice(REQ)).rejects.toThrow(/malformed-response/);
   });
 
   it("refuses to emit when the emissions kill switch is off", async () => {
@@ -383,7 +431,7 @@ describe("arca-gateway.prod — factory", () => {
       transport: {
         async post(_url, body) {
           if (body.includes("<wsaa:loginCms>")) return loginCmsResponse();
-          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns2:getPersonaResponse xmlns:ns2="http://a5.soap.ws.server.puc.sr/"><personaReturn><datosRegimenGeneral><impuesto>30</impuesto></datosRegimenGeneral></personaReturn></ns2:getPersonaResponse></soap:Body></soap:Envelope>`;
+          return `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><ns2:getPersona_v2Response xmlns:ns2="http://a5.soap.ws.server.puc.sr/"><personaReturn><datosGenerales><idPersona>30710145764</idPersona></datosGenerales><datosRegimenGeneral><impuesto><idImpuesto>30</idImpuesto><estadoImpuesto>AC</estadoImpuesto></impuesto></datosRegimenGeneral></personaReturn></ns2:getPersona_v2Response></soap:Body></soap:Envelope>`;
         },
       },
       taStore: inMemoryStore(),

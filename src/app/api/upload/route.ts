@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db/client";
 import { classifyDbError } from "@/lib/db/errors";
 import { queueUpload } from "@/lib/pipeline/ingest";
 import { inngest } from "@/lib/inngest/client";
+import { LocalReceiptStorage } from "@/adapters/storage/local-receipt-storage";
 import {
   isUnauthorizedError,
   requireAccountantSession,
@@ -20,6 +21,10 @@ import {
 
 function errorJson(status: number, message: string, correlationId: string) {
   return NextResponse.json({ error: message, correlationId }, { status });
+}
+
+function errorCategory(error: unknown): string {
+  return error instanceof Error ? error.name.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40) || "Error" : "UnknownError";
 }
 
 /**
@@ -91,21 +96,37 @@ export async function POST(req: Request): Promise<Response> {
       return errorJson(guarded.status, guarded.message, correlationId);
     }
 
-    // Persist PENDING rows (no inline OCR), then trigger the async OCR job.
-    const result = await queueUpload(clientId, guarded.images, {
-      db: getDb(),
-    });
-    for (const row of result.rows) {
-      await inngest.send({
-        name: "ocr/row.pending",
-        data: { rowId: row.id },
-      });
+    // Store privately before persisting references. If queueUpload fails, no
+    // DB references were committed; only then is deleting the objects safe.
+    const storage = new LocalReceiptStorage();
+    const stored: string[] = [];
+    const db = getDb();
+    let result: Awaited<ReturnType<typeof queueUpload>> | undefined;
+    try {
+      for (const item of guarded.images) {
+        const ext = item.storageKey.split(".").at(-1);
+        const type = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
+        await storage.put(item.storageKey, item.image, type);
+        stored.push(item.storageKey);
+      }
+      result = await queueUpload(clientId, guarded.images, { db });
+    } catch (error) {
+      await Promise.all(stored.map((key) => storage.delete(key)));
+      throw error;
+    }
+    try {
+      for (const row of result.rows) {
+        await inngest.send({ name: "ocr/row.pending", data: { rowId: row.id } });
+      }
+    } catch (error) {
+      console.error(`[upload] ${correlationId} dispatch failed (${errorCategory(error)})`);
+      return errorJson(503, "Upload was saved, but processing could not be fully scheduled. Contact support with the reference; do not upload it again.", correlationId);
     }
 
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
     const status = classifyDbError(err);
-    console.error(`[upload] ${correlationId} failed`, err);
+    console.error(`[upload] ${correlationId} failed (${errorCategory(err)})`);
     const message =
       status === 400
         ? "Upload could not be processed (unknown client or invalid reference)"

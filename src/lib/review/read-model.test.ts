@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "@/test-support/test-db";
 import {
+  auditLog,
   batches,
   clients,
   invoices,
@@ -9,6 +10,8 @@ import {
   photos,
 } from "@/lib/db/schema";
 import type { Db } from "@/lib/db/types";
+import { saveCorrections } from "./corrections";
+import { deleteReceiptRow } from "./delete";
 import { listReviewInvoices } from "./read-model";
 
 describe("listReviewInvoices — materializes invoices for the review page", () => {
@@ -26,6 +29,7 @@ describe("listReviewInvoices — materializes invoices for the review page", () 
   });
 
   beforeEach(async () => {
+    await db.delete(auditLog);
     await db.delete(invoices);
     await db.delete(ocrRows);
     await db.delete(photos);
@@ -44,7 +48,7 @@ describe("listReviewInvoices — materializes invoices for the review page", () 
     const [photo] = await db.insert(photos).values({ batchId: batch!.id, storageKey: "k.jpg" }).returning();
     const [row] = await db
       .insert(ocrRows)
-      .values({
+      .values({recipientMode:"identified",taxRate:21,
         photoId: photo!.id,
         fields: { name: "PAGADOR S.A.", amount: 100000, date: "2026-09-22" },
         confidence: { name: 0.9, amount: 0.9 },
@@ -84,10 +88,10 @@ describe("listReviewInvoices — materializes invoices for the review page", () 
     expect(rows[0]!.invoiceStatus).toBe("PENDING");
   });
 
-  it("a CORRECTED row materializes a REVIEWED invoice (approvable)", async () => {
+  it("a CORRECTED row materializes a PENDING invoice (awaiting confirmation)", async () => {
     await seedRow("CORRECTED", "30710145764");
     const rows = await listReviewInvoices(db);
-    expect(rows[0]!.invoiceStatus).toBe("REVIEWED");
+    expect(rows[0]!.invoiceStatus).toBe("PENDING");
   });
 
   it("surfaces a registry-resolved CUIT as not-flagged with its source", async () => {
@@ -96,7 +100,7 @@ describe("listReviewInvoices — materializes invoices for the review page", () 
       .insert(photos)
       .values({ batchId: batch!.id, storageKey: "k.jpg" })
       .returning();
-    await db.insert(ocrRows).values({
+    await db.insert(ocrRows).values({recipientMode:"identified",taxRate:21,
       photoId: photo!.id,
       fields: { name: "PAGADOR S.A.", amount: 100000, date: "2026-09-22" },
       confidence: { name: 0.9, amount: 0.9 },
@@ -117,7 +121,7 @@ describe("listReviewInvoices — materializes invoices for the review page", () 
     await db.update(ocrRows).set({ status: "CORRECTED" }).where(eq(ocrRows.id, rowId));
 
     const rows = await listReviewInvoices(db);
-    expect(rows[0]!.invoiceStatus).toBe("REVIEWED");
+    expect(rows[0]!.invoiceStatus).toBe("PENDING");
     // No duplicate invoice was created.
     const all = await db.select().from(invoices);
     expect(all).toHaveLength(1);
@@ -144,4 +148,23 @@ describe("listReviewInvoices — materializes invoices for the review page", () 
     const [inv] = await db.select().from(invoices).where(eq(invoices.ocrRowId, rowId));
     expect(inv!.status).toBe("EMITTED");
   });
+ it("exposes real issuer identity, original OCR confidence and manual correction provenance",async()=>{
+  const id=await seedRow("BLOCKED",null);
+  await saveCorrections(db,id,{recipientMode:"identified",taxRate:21,name:"Corrected payer",cuit:"30710145764",date:"2026-10-27",amount:200000});
+  const [row]=await listReviewInvoices(db);expect(row!.issuerCuit).toBe("20123456786");expect(row!.ptoVta).toBe(1);expect(row!.confidence).toEqual({name:0.9,amount:0.9});expect(row!.manualFields).toEqual(expect.arrayContaining(["name","amount","date","cuit"]));expect(row!.invoiceStatus).toBe("PENDING");
+ });
+
+ it("skips a row deleted between list fetch and invoice materialization",async()=>{
+  const deletedId=await seedRow("CONFIDENT","30710145764");const survivingId=await seedRow("CONFIDENT","30710145764");let first=true;
+  const interleaved=new Proxy(db,{get(target,key){
+   if(key==="transaction") return async (operation:(tx:Db)=>Promise<unknown>)=>{
+    if(first){first=false;await deleteReceiptRow(db,{put:async()=>{},get:async()=>new Uint8Array(),delete:async()=>{}},deletedId);}
+    return db.transaction(tx=>operation(tx as unknown as Db));
+   };
+   const value=Reflect.get(target,key);return typeof value==="function"?value.bind(target):value;
+  }});
+  const result=await listReviewInvoices(interleaved);expect(result.map(r=>r.rowId)).toEqual([survivingId]);
+  expect(await db.select().from(invoices).where(eq(invoices.ocrRowId,deletedId))).toHaveLength(0);
+ });
+
 });

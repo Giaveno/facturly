@@ -13,7 +13,7 @@ import { InvalidPemError, KeyMismatchError } from "@/lib/credentials/pem";
 import { saveCredentials } from "@/lib/credentials/service";
 
 function errorJson(status: number, message: string, correlationId: string) {
-  return NextResponse.json({ error: message, correlationId }, { status });
+  return NextResponse.json({ error: message, correlationId }, { status, headers: { "Cache-Control": "no-store" } });
 }
 
 /**
@@ -60,7 +60,7 @@ export async function POST(req: Request): Promise<Response> {
     const aesKey = process.env.AES_KEY ?? "";
     const info = await saveCredentials(getDb(), { certPem, keyPem }, aesKey);
     // PUBLIC metadata only — never the key.
-    return NextResponse.json(info);
+    return NextResponse.json(info, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     if (err instanceof InvalidPemError) {
       return errorJson(400, "The certificate or private key is invalid", correlationId);
@@ -68,7 +68,7 @@ export async function POST(req: Request): Promise<Response> {
     if (err instanceof KeyMismatchError) {
       return errorJson(400, "The private key does not match the certificate", correlationId);
     }
-    console.error(`[credentials] ${correlationId} failed`, err);
+    console.error(`[credentials] ${correlationId} failed`);
     return errorJson(500, "Failed to save credentials", correlationId);
   }
 }

@@ -27,7 +27,8 @@ const EMISOR_CONDICIONES: ReadonlySet<string> = new Set([
   "exento",
 ]);
 
-const MAX_PTO_VTA = 9999;
+// WSFEv1 accepts five-digit points in the range 1..99998 (ARCA validation 11000).
+const MAX_PTO_VTA = 99998;
 
 /** Thrown on an invalid client payload (mapped to 400). */
 export class ClientValidationError extends Error {

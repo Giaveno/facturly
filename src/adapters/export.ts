@@ -22,6 +22,8 @@ export interface ExportRow {
   amountCentavos: Centavos;
   date: string;
   status: string;
+  documentType?: number;
+  documentNumber?: number;
 }
 
 /** Invoice statuses that are exportable (reviewed or emitted, not discarded). */
@@ -35,6 +37,10 @@ export async function listExportRows(db: Db): Promise<ExportRow[]> {
       fields: ocrRows.fields,
       cuit: ocrRows.cuit,
       status: invoices.status,
+      recipientMode: ocrRows.recipientMode,
+      documentType: invoices.receptorDocTipo,
+      documentNumber: invoices.receptorDocNro,
+      approvedName: invoices.receptorRazonSocial,
     })
     .from(invoices)
     .innerJoin(ocrRows, eq(invoices.ocrRowId, ocrRows.id))
@@ -46,17 +52,19 @@ export async function listExportRows(db: Db): Promise<ExportRow[]> {
 
   return rows.map((r) => ({
     razonSocial: r.razonSocial,
-    payerName: r.fields.name,
-    cuit: r.cuit,
+    payerName: r.approvedName ?? (r.recipientMode === "consumer_final" ? "Consumidor Final" : r.fields.name),
+    cuit: r.documentType === 99 || (r.documentType === null && r.recipientMode === "consumer_final") ? null : r.documentType === 80 && r.documentNumber !== null ? String(r.documentNumber) : r.cuit,
     amountCentavos: r.fields.amount,
     date: r.fields.date,
     status: r.status,
+    documentType: r.documentType ?? (r.recipientMode === "consumer_final" ? 99 : 80),
+    documentNumber: r.documentNumber ?? (r.recipientMode === "consumer_final" ? 0 : Number(r.cuit)),
   }));
 }
 
 /** Writes export rows to an .xlsx workbook (amounts as numeric cells). */
 export function exportRowsToXlsx(rows: ExportRow[]): Uint8Array {
-  const header = ["Client", "Payer", "CUIT", "Amount", "Date", "Status"];
+  const header = ["Client", "Payer", "CUIT", "Amount", "Date", "Status", "Document Type", "Document Number"];
   const aoa: Array<Array<string | number>> = [header];
   for (const r of rows) {
     aoa.push([
@@ -67,6 +75,8 @@ export function exportRowsToXlsx(rows: ExportRow[]): Uint8Array {
       r.amountCentavos / 100,
       r.date,
       r.status,
+      r.documentType ?? (r.cuit ? 80 : 99),
+      r.documentNumber ?? (r.cuit ? Number(r.cuit) : 0),
     ]);
   }
 

@@ -96,9 +96,9 @@ export function cbteTipo(
 }
 
 /**
- * IVA discrimination follows the comprobante type by law, NOT a configurable
- * flag. Only Factura A discriminates IVA (itemized alícuotas); B and C are
- * priced gross with IVA included and no breakdown.
+ * Legacy presentation distinction only. NEVER use this predicate to derive
+ * WSFE amounts: taxable A AND B require net/IVA and alicuotas. C has no IVA.
+ * Fiscal-transparency presentation requirements are a separate concern.
  */
 export function discriminatesIva(cbteTipo: CbteTipo): boolean {
   return cbteTipo === FACTURA_A;

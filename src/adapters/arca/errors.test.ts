@@ -72,11 +72,12 @@ describe("errors — classification", () => {
     expect(classifyFaultCode(undefined)).toBe("business");
   });
 
-  it("classifies ARCA codes: 10015/10016 duplicate, 600-699 auth, else business", () => {
-    expect(classifyArcaErrorCode("10015")).toBe("duplicate");
+  it("classifies ARCA codes without misclassifying no-data 602 as auth", () => {
+    expect(classifyArcaErrorCode("10015")).toBe("business");
     expect(classifyArcaErrorCode("10016")).toBe("duplicate");
     expect(classifyArcaErrorCode("600")).toBe("auth");
     expect(classifyArcaErrorCode("601")).toBe("auth");
+    expect(classifyArcaErrorCode("602")).toBe("business");
     expect(classifyArcaErrorCode("10049")).toBe("business");
   });
 

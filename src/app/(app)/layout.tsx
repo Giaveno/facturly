@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { auth } from "@/auth";
 import LogoutButton from "./logout-button";
+import AppNavigation, { CurrentPageContext } from "./app-navigation";
 
 /**
  * Authenticated app shell — navigation between Upload, Review, Invoices (and a
@@ -15,18 +16,24 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const email = session?.user?.email ?? "";
 
   return (
-    <div>
-      <nav>
-        <Link href="/">Upload</Link>{" "}
-        <Link href="/review">Review</Link>{" "}
-        <Link href="/invoices">Invoices</Link>{" "}
-        <Link href="/clients">Clients</Link>{" "}
-        <Link href="/credentials">Credentials</Link>
-      </nav>
-      <div>
-        {email ? <span>{email}</span> : null} <LogoutButton />
+    <div className="app-shell">
+      <aside className="sidebar">
+        <Link className="brand" href="/" aria-label="Facturly, inicio">
+          <span className="brand-mark" aria-hidden="true">F</span> facturly
+        </Link>
+        <AppNavigation />
+        <div className="sidebar-footer">
+          {email ? <p>{email}</p> : null}
+          <LogoutButton />
+        </div>
+      </aside>
+      <div className="app-main">
+        <header className="topbar">
+          <CurrentPageContext />
+          <div className="topbar-actions">Acceso seguro</div>
+        </header>
+        {children}
       </div>
-      {children}
     </div>
   );
 }

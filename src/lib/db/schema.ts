@@ -20,7 +20,7 @@
  *
  *   Mapping (enforced by `src/domain/emission.ts`, not by the enum alone):
  *       BLOCKED   ⇒ the invoice stays PENDING (not emittable)
- *       CORRECTED ⇒ the invoice becomes REVIEWED
+ *       CORRECTED => the invoice stays PENDING until explicit review confirmation
  */
 
 import {
@@ -40,6 +40,8 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { OcrFields } from "../../ports/ocr-provider";
+import type { RecipientMode } from "@/domain/receipt";
+import type { ApprovalSnapshot } from "@/domain/approval-snapshot";
 
 /**
  * Where a row's CUIT came from. Distinguishes a registry-resolved CUIT (read
@@ -169,8 +171,11 @@ export const ocrRows = pgTable(
     // Checksum-validated CUIT, or null when absent (registry resolution).
     cuit: text("cuit"),
     // Which source produced `cuit`: the OCR image, the registry read side, or a
-    // manual correction. Null when the row has no CUIT (still flagged).
+    // manual correction. Absence is only flagged for an identified recipient.
     cuitSource: text("cuit_source").$type<CuitSource>(),
+    recipientMode: text("recipient_mode").$type<RecipientMode>().notNull().default("consumer_final"),
+    recipientModeSource: text("recipient_mode_source").notNull().default("upload_default"),
+    taxRate: numeric("tax_rate", { mode: "number" }),
     status: ocrRowStatus("status").notNull().default("PENDING"),
     // Set when a PENDING row's async OCR fails (status FAILED) — the reason the
     // extraction crashed, surfaced to the accountant (W7).
@@ -182,6 +187,8 @@ export const ocrRows = pgTable(
       "ocr_rows_cuit_source_check",
       sql`${table.cuitSource} IN ('ocr', 'registry', 'manual')`,
     ),
+    check("ocr_rows_recipient_mode_check", sql`${table.recipientMode} IN ('consumer_final', 'identified')`),
+    check("ocr_rows_tax_rate_check", sql`${table.taxRate} IN (10.5, 21, 27)`),
   ],
 );
 
@@ -202,6 +209,7 @@ export const invoices = pgTable(
       .references(() => clients.id),
     status: invoiceStatus("status").notNull().default("PENDING"),
     cbteTipo: integer("cbte_tipo"), // 1|6|11 — resolved by policy once receptor is known
+    approvalSnapshot: jsonb("approval_snapshot").$type<ApprovalSnapshot>(),
     discardReason: text("discard_reason"),
     receptorDocTipo: integer("receptor_doc_tipo"),
     receptorDocNro: bigint("receptor_doc_nro", { mode: "number" }),
@@ -217,6 +225,7 @@ export const invoices = pgTable(
     cotizacion: numeric("cotizacion", { mode: "number" }),
     importeNetoCentavos: bigint("importe_neto_centavos", { mode: "number" }),
     importeIvaCentavos: bigint("importe_iva_centavos", { mode: "number" }),
+    taxRate: numeric("tax_rate", { mode: "number" }),
     importeTotalCentavos: bigint("importe_total_centavos", { mode: "number" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
@@ -348,4 +357,13 @@ export const taCache = pgTable("ta_cache", {
   sign: text("sign").notNull(),
   expiresAtMs: bigint("expires_at_ms", { mode: "number" }).notNull(),
   issuedAtMs: bigint("issued_at_ms", { mode: "number" }).notNull(),
+});
+
+/** Durable, unlinked file cleanup outbox; never contains receipt contents. */
+export const receiptCleanup = pgTable("receipt_cleanup", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  rowId: uuid("row_id").notNull().unique(),
+  storageKey: text("storage_key").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"),
 });

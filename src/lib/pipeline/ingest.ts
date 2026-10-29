@@ -80,9 +80,9 @@ export async function processUpload(
       const result = await ocr.extract(image);
       const status = classifyOcrRowStatus(result.confidence);
 
-      // A valid OCR CUIT wins; otherwise resolve from the registry READ side so
-      // a known payer arrives already carrying its CUIT (never a manual re-entry).
-      const { cuit, cuitSource, matchedBy } = await resolveRowCuit(tx, result);
+      // New uploads intentionally start anonymous: retain direct OCR evidence
+      // only, never infer identity through payer-registry matching.
+      const { cuit, cuitSource, matchedBy } = await resolveRowCuit(tx, result, "consumer_final");
 
       const [row] = await tx
         .insert(ocrRows)

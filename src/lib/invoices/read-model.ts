@@ -63,8 +63,9 @@ export async function loadIssuedInvoicePdfInput(
 ): Promise<InvoicePdfInput | null> {
   const [row] = await db
     .select({
-      cuit: clients.cuit,
-      ptoVta: clients.ptoVta,
+      // Reservation pins the issuer fiscal tuple, including for legacy rows.
+      cuit: issuedInvoices.cuit,
+      ptoVta: issuedInvoices.ptoVta,
       cbteTipo: invoices.cbteTipo,
       cbteNro: issuedInvoices.cbteNro,
       cae: issuedInvoices.cae,
@@ -76,6 +77,7 @@ export async function loadIssuedInvoicePdfInput(
       receptorDocNro: invoices.receptorDocNro,
       condicionIvaReceptorId: invoices.condicionIvaReceptorId,
       receptorRazonSocial: invoices.receptorRazonSocial,
+      approvalSnapshot: invoices.approvalSnapshot,
     })
     .from(issuedInvoices)
     .innerJoin(invoices, eq(issuedInvoices.invoiceId, invoices.id))
@@ -116,5 +118,6 @@ export async function loadIssuedInvoicePdfInput(
     receptorDocNro: row.receptorDocNro!,
     condicionIvaReceptorId: row.condicionIvaReceptorId!,
     receptorRazonSocial: row.receptorRazonSocial!,
+    environment: row.approvalSnapshot?.environment,
   };
 }

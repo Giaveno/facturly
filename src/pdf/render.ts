@@ -30,6 +30,8 @@ export const LEY_27618_LEGEND =
 
 /** The data an issued invoice contributes to its PDF + QR. */
 export interface InvoicePdfInput {
+  /** Persisted approval environment only; never inferred from current config. */
+  environment?: "production" | "homologacion";
   /** Emisor CUIT (11 digits, no separators). */
   cuit: string;
   ptoVta: number;
@@ -75,6 +77,7 @@ export function buildInvoiceQrUrl(input: InvoicePdfInput): string {
 
 /** Pure PDF content model — what gets drawn, before any rendering. */
 export interface PdfContentModel {
+  homologacion?: boolean;
   qrUrl: string;
   lines: Array<{ label: string; value: string }>;
   includesLey27618Legend: boolean;
@@ -84,6 +87,7 @@ export interface PdfContentModel {
 export function buildInvoicePdfModel(input: InvoicePdfInput): PdfContentModel {
   const legend = requiresLey27618Legend(input.cbteTipo, input.condicionIvaReceptorId);
   return {
+    homologacion: input.environment === "homologacion",
     qrUrl: buildInvoiceQrUrl(input),
     lines: [
       { label: "Comprobante", value: String(input.cbteTipo) },
@@ -91,6 +95,7 @@ export function buildInvoicePdfModel(input: InvoicePdfInput): PdfContentModel {
       { label: "Número", value: String(input.cbteNro) },
       { label: "Fecha", value: input.fechaEmision },
       { label: "Receptor", value: input.receptorRazonSocial },
+      { label: "Documento", value: input.receptorDocTipo === 99 ? "Sin identificar (99 / 0)" : `${input.receptorDocTipo === 80 ? "CUIT" : "Tipo " + input.receptorDocTipo} ${input.receptorDocNro}` },
       { label: "Importe", value: formatCentavos(input.importeTotal) },
       { label: "CAE", value: input.cae },
       { label: "CAE Vencimiento", value: input.caeFchVto },
@@ -121,6 +126,10 @@ export async function renderInvoicePdf(
   const font = await doc.embedFont(StandardFonts.Helvetica);
 
   let y = 800;
+  if (model.homologacion) {
+    page.drawText("HOMOLOGACION - SIN VALIDEZ FISCAL", {x:50,y,size:16,font});
+    y -= 30;
+  }
   for (const line of model.lines) {
     page.drawText(`${line.label}: ${line.value}`, { x: 50, y, size: 11, font });
     y -= 20;

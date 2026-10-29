@@ -11,8 +11,8 @@ import type { Db } from "@/lib/db/types";
 /**
  * Marks a BLOCKED row CORRECTED after a human fixes its extracted fields.
  *
- * Per the dual status machine, a CORRECTED row implies its invoice becomes
- * REVIEWED (see `invoiceStatusForRow`). The invoice row itself is materialized
+ * Per the dual status machine, a CORRECTED row still requires explicit invoice review
+ * confirmation (see `invoiceStatusForRow`). The invoice row itself is materialized
  * at review time by slice 4; here we only transition the OCR row.
  */
 export async function markRowCorrected(

@@ -14,10 +14,10 @@ export default async function CredentialsPage() {
   const info = await getCredentialInfo(getDb());
 
   return (
-    <main>
-      <h1>ARCA credentials</h1>
+    <main className="page-content">
+      <div className="page-heading"><div><p className="eyebrow">Configuración</p><h1>Credenciales ARCA</h1><p className="lede">Administrá el certificado público y la clave privada usados por el servicio.</p></div></div>
 
-      <h2>Loaded certificate</h2>
+      <section className="surface credential-summary"><h2>Certificado cargado</h2>
       {info ? (
         <dl>
           <dt>Subject</dt>
@@ -28,13 +28,18 @@ export default async function CredentialsPage() {
           <dd>{info.notBefore}</dd>
           <dt>Expires</dt>
           <dd>{info.notAfter}</dd>
+          <dt>Huella SHA-256</dt>
+          <dd>{info.fingerprint}</dd>
         </dl>
       ) : (
-        <p>No certificate uploaded yet.</p>
+        <div className="empty-state"><strong>No hay un certificado cargado.</strong><p>Subí el certificado y su clave privada para continuar con la configuración.</p></div>
       )}
+      <p className="helper-note">Los datos mostrados corresponden al certificado público. La clave privada nunca se vuelve a mostrar.</p></section>
 
-      <h2>{info ? "Replace certificate + key" : "Upload certificate + key"}</h2>
-      <CredentialsForm />
+      <section className="page-section"><h2>{info ? "Reemplazar certificado y clave" : "Cargar certificado y clave"}</h2>
+      <p className="helper-note">Entorno configurado: {process.env.ARCA_ENV === "homologacion" ? "homologación" : process.env.ARCA_ENV === "production" ? "producción (prueba deshabilitada)" : "no válido (prueba deshabilitada)"}.</p>
+      <CredentialsForm initialCertificate={info} />
+      </section>
     </main>
   );
 }

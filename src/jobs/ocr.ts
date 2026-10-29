@@ -16,16 +16,13 @@ import { inngest } from "@/lib/inngest/client";
 import { processOcrRow, type ImageReader } from "@/lib/ocr/process";
 import { getDb } from "@/lib/db/client";
 import type { OcrProvider } from "@/ports/ocr-provider";
+import { LocalReceiptStorage } from "@/adapters/storage/local-receipt-storage";
+import { createConfiguredOcrProvider } from "@/adapters/ocr/ocr.gemini";
 
-// Slice-5 wiring placeholders (fail loudly, never the in-memory fake).
-const ocrProvider: OcrProvider = {
-  extract: () => {
-    throw new Error("Production OCR adapter is not wired (slice 5)");
-  },
-};
-const readImage: ImageReader = () => {
-  throw new Error("Storage reader is not wired (slice 5)");
-};
+// Gemini is used only by the authenticated server-side async OCR job and only
+// when explicitly opted in with OCR_PROVIDER=gemini.
+const ocrProvider: OcrProvider = createConfiguredOcrProvider();
+const readImage: ImageReader = (key) => new LocalReceiptStorage().get(key);
 
 export const processOcrRowJob = inngest.createFunction(
   {

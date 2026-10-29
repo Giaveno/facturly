@@ -133,6 +133,16 @@ describe("wsaa — SOAP parsing", () => {
 });
 
 describe("wsaa — WsaaClient.loginCms", () => {
+  it("accepts the documented XML string loginCmsReturn (escaped or CDATA), not a CMS response", async () => {
+    const inner = '<loginTicketResponse version="1.0"><header><expirationTime>2099-01-01T00:00:00Z</expirationTime></header><credentials><token>TOKEN</token><sign>SIGN</sign></credentials></loginTicketResponse>';
+    for (const value of [inner.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"), `<![CDATA[${inner}]]>`]) {
+      const client = new WsaaClient({ url: "https://example.test", credentials: FIXTURE, transport: { post: async () => `<Envelope><Body><loginCmsResponse><loginCmsReturn>${value}</loginCmsReturn></loginCmsResponse></Body></Envelope>` } });
+      expect(await client.loginCms("wsfe")).toEqual({ token: "TOKEN", sign: "SIGN", expirationTime: "2099-01-01T00:00:00Z" });
+    }
+  });
+  it("generates uniqueIds within the documented xsd:unsignedInt range", () => {
+    for (const id of [defaultUniqueId(), defaultUniqueId()]) expect(Number(id)).toBeLessThanOrEqual(0xffffffff);
+  });
   const FAKE_TA = {
     token: "VE9LRU5fQkFTRTY0",
     sign: "U0lHTl9CQVNFNjQ=",

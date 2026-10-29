@@ -198,6 +198,9 @@ export async function runDemo(options: DemoOptions): Promise<DemoResult> {
       const rowId = rowIds[i]!;
       const promoted = await processOcrRow(db, ocr, rowId, getImage);
       const [row] = await db.select().from(ocrRows).where(eq(ocrRows.id, rowId));
+      // This offline fixture explicitly exercises identified recipients. The
+      // primary upload workflow intentionally defaults to consumer_final.
+      await db.update(ocrRows).set({recipientMode:"identified",recipientModeSource:"manual",taxRate:21}).where(eq(ocrRows.id,rowId));
       const inv = await materializeInvoice(db, rowId);
       invoicesByRow.set(receipt.storageKey, inv.id);
 
@@ -272,9 +275,9 @@ export async function runDemo(options: DemoOptions): Promise<DemoResult> {
     // ── Flag: no CUIT row is NOT approvable ────────────────────────────────
     step("7", "Flag — the no-CUIT row is not approvable");
     const deltaId = invoicesByRow.get("delta.jpg")!;
-    await markInvoiceReviewed(db, deltaId);
     let flaggedReason = "";
     try {
+      await markInvoiceReviewed(db, deltaId);
       await approveInvoice(db, gateway, deltaId, now);
     } catch (err) {
       flaggedReason = err instanceof Error ? err.message : String(err);

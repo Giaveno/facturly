@@ -18,6 +18,7 @@
 import forge from "node-forge";
 import { XMLParser } from "fast-xml-parser";
 import { noopLogger, noopMetrics, type ArcaLogger, type ArcaMetrics } from "./logger";
+import { ArcaQueryError } from "./query-diagnostics";
 
 // node-forge's `pki.oids` is typed as an index signature (`string | undefined`
 // under noUncheckedIndexedAccess), but these OID constants always exist.
@@ -167,7 +168,7 @@ export function buildLoginCmsEnvelope(base64Cms: string): string {
   );
 }
 
-/** Extracts the base64 `loginCmsReturn` value from the SOAP response. */
+/** Extracts the XML ticket string in `loginCmsReturn` from the SOAP response. */
 export function parseLoginCmsResponse(soapXml: string): string {
   const parsed = XML_PARSER().parse(soapXml) as {
     Envelope?: { Body?: { loginCmsResponse?: { loginCmsReturn?: unknown } } };
@@ -229,12 +230,13 @@ export interface WsaaClientOptions {
 /** Default TRA validity window (minutes). */
 export const DEFAULT_TRA_TTL_MINUTES = 5;
 
-// Monotonic numeric uniqueId — WSAA's `uniqueId` is xsd:integer. Uses epoch
-// milliseconds, advancing by 1 whenever two calls share the same millisecond.
+// WSAA specifies xsd:unsignedInt, not an arbitrary integer. Epoch seconds fit
+// the 32-bit range; milliseconds do not. Advance for repeated calls, wrapping
+// only at the unsigned boundary (generationTime also identifies the request).
 let lastUniqueId = 0;
 export function defaultUniqueId(): string {
-  const now = Date.now();
-  lastUniqueId = now > lastUniqueId ? now : lastUniqueId + 1;
+  const now = Math.floor(Date.now() / 1000);
+  lastUniqueId = (now > lastUniqueId ? now : lastUniqueId + 1) % 0x100000000;
   return String(lastUniqueId);
 }
 
@@ -285,9 +287,14 @@ export class WsaaClient {
     const cms = signTraCms(credentials, tra);
     const envelope = buildLoginCmsEnvelope(cms);
     const response = await this.transport.post(this.url, envelope, SOAP_HEADERS);
-    const cmsResponse = parseLoginCmsResponse(response);
-    const ticketXml = extractCmsContent(cmsResponse);
-    const ta = parseLoginTicketResponse(ticketXml);
+    let ta: WsaaTa;
+    try {
+      const ticket = parseLoginCmsResponse(response).trim();
+      // WSAA returns escaped XML (or CDATA), NOT a signed CMS response. Keep
+      // compatibility with the older CMS fixtures without assuming it on wire.
+      const ticketXml = ticket.startsWith("<") ? ticket : extractCmsContent(ticket);
+      ta = parseLoginTicketResponse(ticketXml);
+    } catch { throw new ArcaQueryError("wsaa", "malformed-response"); }
     this.metrics.increment("wsaa_login_success");
     this.logger.info("wsaa_login_success", {
       service,

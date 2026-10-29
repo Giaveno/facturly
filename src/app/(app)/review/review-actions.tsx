@@ -16,49 +16,58 @@ interface ReviewActionsProps {
 
 async function readError(res: Response): Promise<string> {
   const json = (await res.json().catch(() => ({}))) as { error?: string };
-  return json.error ?? "Action failed";
+  return json.error ?? "No se pudo completar la acción.";
 }
 
 /**
  * Per-row review actions. Wires the accountant's operations to the existing
  * server endpoints: confirm (PENDING → REVIEWED), approve (→ APPROVED, triggers
  * the async emit), reject/discard (with a reason), and payer-CUIT resolution for
- * flagged rows. A BLOCKED row offers no approve. Plain — no design work.
+ * flagged rows. A BLOCKED row offers no approval.
  */
 export default function ReviewActions(props: ReviewActionsProps) {
   const router = useRouter();
   const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
 
   async function run(fn: () => Promise<Response>, success: string) {
     setMessage("");
-    const res = await fn();
-    if (res.ok) {
-      setMessage(success);
-      router.refresh();
-    } else {
-      setMessage(await readError(res));
+    setBusy(true);
+    try {
+      const res = await fn();
+      if (res.ok) {
+        setMessage(success);
+        router.refresh();
+      } else {
+        setMessage(await readError(res));
+      }
+    } catch {
+      setMessage("No se pudo conectar con el servicio. Intentá nuevamente.");
+    } finally {
+      setBusy(false);
     }
   }
 
   const approve = () =>
+    window.confirm("Al aprobar, se iniciará el proceso de emisión del comprobante en ARCA. ¿Querés continuar?") &&
     run(
       () =>
         fetch(`/api/invoices/${props.invoiceId}/approve`, { method: "POST" }),
-      "Approved — emission queued",
+      "Aprobada. Se inició el proceso de emisión; el estado final puede tardar en actualizarse.",
     );
 
   const confirm = () =>
     run(
       () =>
         fetch(`/api/invoices/${props.invoiceId}/review`, { method: "POST" }),
-      "Confirmed — ready to approve",
+      "Revisión confirmada. Ya podés aprobar el comprobante.",
     );
 
   const reject = () => {
-    const reason = window.prompt("Discard reason (non-sale transfer, refund, …)");
+    const reason = window.prompt("Motivo del rechazo (por ejemplo, transferencia no comercial o devolución)");
     if (reason === null) return;
     if (reason.trim() === "") {
-      setMessage("A discard reason is required");
+      setMessage("Indicá un motivo para rechazar el comprobante.");
       return;
     }
     void run(
@@ -68,7 +77,7 @@ export default function ReviewActions(props: ReviewActionsProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ reason }),
         }),
-      "Discarded",
+      "Comprobante rechazado.",
     );
   };
 
@@ -83,7 +92,7 @@ export default function ReviewActions(props: ReviewActionsProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ cuit }),
         }),
-      "CUIT resolved — row is now approvable",
+      "CUIT resuelto. Actualizando el estado del comprobante.",
     );
   }
 
@@ -91,68 +100,68 @@ export default function ReviewActions(props: ReviewActionsProps) {
 
   switch (state.kind) {
     case "failed":
-      return <span>Failed — cannot approve</span>;
+      return <span role="status">Falló el procesamiento; no se puede aprobar.</span>;
 
     case "resolve":
       return (
         <span>
           {state.blocked ? <em>Blocked · </em> : null}
-          <form onSubmit={onResolve} style={{ display: "inline" }}>
-            <input name="cuit" placeholder="Payer CUIT" required />
-            <button type="submit">Resolve CUIT</button>
+          <form onSubmit={onResolve}>
+            <label>CUIT del pagador<input name="cuit" placeholder="CUIT" inputMode="numeric" required /></label>
+            <button type="submit" disabled={busy}>Resolver CUIT</button>
           </form>
-          <button type="button" onClick={reject}>
-            Reject
+          <button type="button" onClick={reject} disabled={busy}>
+            Rechazar
           </button>
-          {message ? <span> {message}</span> : null}
+          {message ? <span role="status">{message}</span> : null}
         </span>
       );
 
     case "blocked":
       return (
         <span>
-          <button disabled>Blocked — cannot approve</button>
-          <button type="button" onClick={reject}>
-            Reject
+          <button disabled>Bloqueada: no se puede aprobar</button>
+          <button type="button" onClick={reject} disabled={busy}>
+            Rechazar
           </button>
-          {message ? <span> {message}</span> : null}
+          {message ? <span role="status">{message}</span> : null}
         </span>
       );
 
     case "pending":
       return (
         <span>
-          <button type="button" onClick={confirm}>
-            Confirm
+          <button type="button" onClick={confirm} disabled={busy}>
+            Confirmar revisión
           </button>
-          <button type="button" onClick={reject}>
-            Reject
+          <button type="button" onClick={reject} disabled={busy}>
+            Rechazar
           </button>
-          {message ? <span> {message}</span> : null}
+          {message ? <span role="status">{message}</span> : null}
         </span>
       );
 
     case "reviewed":
       return (
         <span>
-          <button type="button" onClick={approve}>
-            Approve
+          <button type="button" onClick={approve} disabled={busy}>
+            Aprobar y emitir
           </button>
-          <button type="button" onClick={reject}>
-            Reject
+          <button type="button" onClick={reject} disabled={busy}>
+            Rechazar
           </button>
-          {message ? <span> {message}</span> : null}
+          {message ? <span role="status">{message}</span> : null}
         </span>
       );
 
     case "approved":
-      return <span>Approved — emission queued</span>;
+      return <span>Aprobada; emisión en proceso</span>;
 
     case "emitted":
-      return <span>Emitted</span>;
+      return <span>Emitida</span>;
 
     case "rejected":
-      return <span>Discarded</span>;
+      return <span>Rechazada</span>;
 
     default:
       return <span>{state.status}</span>;

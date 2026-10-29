@@ -56,6 +56,7 @@ describe("resolveRowCuit — OCR CUIT vs registry CUIT", () => {
     const result = await resolveRowCuit(
       db,
       ocrResult({ cbu: "0110599520000001234567" }),
+      "identified",
     );
 
     expect(result).toEqual({ cuit: "30710145764", cuitSource: "registry", matchedBy: "cbu" });
@@ -65,8 +66,13 @@ describe("resolveRowCuit — OCR CUIT vs registry CUIT", () => {
     const result = await resolveRowCuit(
       db,
       ocrResult({ cbu: "0110599520000009999999" }),
+      "identified",
     );
 
     expect(result).toEqual({ cuit: null, cuitSource: null, matchedBy: null });
+  });
+  it("does not even access the registry for default anonymous extraction",async()=>{
+    const blockedDb=new Proxy({} as Db,{get(){throw new Error("Registry must not be consulted");}});
+    expect(await resolveRowCuit(blockedDb,ocrResult({name:"Known payer"}))).toEqual({cuit:null,cuitSource:null,matchedBy:null});
   });
 });

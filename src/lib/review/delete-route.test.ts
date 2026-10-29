@@ -1,0 +1,21 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("@/lib/auth/session", async original => ({...await original<typeof import("@/lib/auth/session")>(),requireAccountantSession:vi.fn()}));
+vi.mock("@/lib/db/client",()=>({getDb:vi.fn(()=>({}))}));
+vi.mock("@/adapters/storage/local-receipt-storage",()=>({LocalReceiptStorage:class {}}));
+vi.mock("@/lib/review/delete",()=>({deleteReceiptRow:vi.fn(),ReceiptDeletionStateError:class extends Error {}}));
+import { requireAccountantSession, UnauthorizedError } from "@/lib/auth/session";
+import { deleteReceiptRow, ReceiptDeletionStateError } from "@/lib/review/delete";
+import { DELETE } from "@/app/api/rows/[id]/route";
+const id="00000000-0000-4000-8000-000000000000";
+const req=(origin="https://app.example.com")=>new Request("https://app.example.com/api/rows/"+id,{method:"DELETE",headers:{origin,host:"app.example.com"}});
+const params=(value=id)=>({params:Promise.resolve({id:value})});
+describe("receipt DELETE route",()=>{
+ beforeEach(()=>{vi.clearAllMocks();vi.mocked(requireAccountantSession).mockResolvedValue();vi.mocked(deleteReceiptRow).mockResolvedValue({deleted:true,cleanup:"complete"});});
+ it("validates UUID without touching service",async()=>{expect((await DELETE(req(),params("bad"))).status).toBe(400);expect(deleteReceiptRow).not.toHaveBeenCalled();});
+ it("rejects cross-origin before auth",async()=>{expect((await DELETE(req("https://evil.example.com"),params())).status).toBe(403);expect(requireAccountantSession).not.toHaveBeenCalled();expect(deleteReceiptRow).not.toHaveBeenCalled();});
+ it("requires authentication",async()=>{vi.mocked(requireAccountantSession).mockRejectedValue(new UnauthorizedError());const res=await DELETE(req(),params());expect(res.status).toBe(401);expect(deleteReceiptRow).not.toHaveBeenCalled();expect(res.headers.get("cache-control")).toContain("no-store");});
+ it("returns state conflict without fiscal services",async()=>{vi.mocked(deleteReceiptRow).mockRejectedValue(new ReceiptDeletionStateError("Fiscal guard"));expect((await DELETE(req(),params())).status).toBe(409);});
+ it("hides unexpected details",async()=>{vi.mocked(deleteReceiptRow).mockRejectedValue(new Error("secret database path"));const res=await DELETE(req(),params());expect(res.status).toBe(500);expect(await res.text()).not.toContain("secret");});
+ it("reports completed deletion without caching",async()=>{const res=await DELETE(req(),params());expect(res.status).toBe(200);expect(await res.json()).toEqual({deleted:true,cleanup:"complete"});expect(res.headers.get("cache-control")).toContain("no-store");});
+ it("honestly reports durable file cleanup pending",async()=>{vi.mocked(deleteReceiptRow).mockResolvedValue({deleted:true,cleanup:"pending"});const res=await DELETE(req(),params());expect(res.status).toBe(202);expect(await res.json()).toEqual({deleted:true,cleanup:"pending"});});
+});

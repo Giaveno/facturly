@@ -41,7 +41,7 @@ function req(body?: string, init?: { origin?: string }): Request {
   if (init?.origin) headers.set("origin", init.origin);
   return new Request("http://app.example.com/api", {
     method: "POST",
-    body,
+    body:body ?? JSON.stringify({expected:{recipientMode:"identified",taxRate:21,issuerCondition:"ri",rowId:VALID_UUID,name:"Payer",cuit:"30710145764",date:"2026-10-28",amount:100,issuerCuit:"20123456786",issuerName:"Issuer",ptoVta:1,environment:"homologacion"}}),
     headers,
   });
 }
@@ -161,6 +161,7 @@ describe("invoice approve/reject routes — W5, C6, W4, C4", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual({ id: VALID_UUID, status: "APPROVED" });
+    expect(approveInvoice).toHaveBeenCalledWith({}, {}, VALID_UUID, undefined, expect.objectContaining({amount:100,name:"Payer",issuerName:"Issuer"}), "homologacion");
 
     expect(inngest.send).toHaveBeenCalledWith({
       name: "emit/batch.requested",
@@ -212,4 +213,10 @@ describe("invoice approve/reject routes — W5, C6, W4, C4", () => {
     const res = await rejectPOST(req(JSON.stringify({ reason: "" })), params(VALID_UUID));
     expect(res.status).toBe(400);
   });
+  it("approval requires the displayed snapshot before touching DB or gateway",async()=>{
+    vi.mocked(requireAccountantSession).mockResolvedValue();
+    const res=await approvePOST(req("{}"),params(VALID_UUID));
+    expect(res.status).toBe(400);expect(getDb).not.toHaveBeenCalled();expect(buildArcaGateway).not.toHaveBeenCalled();expect(inngest.send).not.toHaveBeenCalled();
+  });
+
 });

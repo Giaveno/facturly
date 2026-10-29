@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import React, { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 
 const CONDICIONES: Array<[string, string]> = [
@@ -32,23 +32,27 @@ export default function ClientsForm() {
       createDelegation: data.get("createDelegation") === "on",
     };
 
-    const res = await fetch("/api/clients", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const json = (await res.json()) as { error?: string };
-    if (res.ok) {
-      form.reset();
-      setFeedback("Client created.");
-      router.refresh();
-    } else {
-      setError(json.error ?? "Failed to create client");
+    try {
+      const res = await fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = (await res.json()) as { error?: string };
+      if (res.ok) {
+        form.reset();
+        setFeedback("Cliente creado.");
+        router.refresh();
+      } else {
+        setError(json.error ?? "No se pudo crear el cliente.");
+      }
+    } catch {
+      setError("No se pudo conectar con el servicio. Intentá nuevamente.");
     }
   }
 
   return (
-    <form onSubmit={onSubmit}>
+    <form className="surface form-stack" onSubmit={onSubmit}>
       <label>
         Razón social
         <input name="razonSocial" required />
@@ -59,10 +63,10 @@ export default function ClientsForm() {
       </label>
       <label>
         Punto de venta
-        <input name="ptoVta" type="number" min={1} max={9999} required />
+        <input name="ptoVta" type="number" min={1} max={99998} required />
       </label>
       <label>
-        Condición IVA
+        Condición frente al IVA
         <select name="condicionIva">
           {CONDICIONES.map(([value, label]) => (
             <option key={value} value={value}>
@@ -73,11 +77,11 @@ export default function ClientsForm() {
       </label>
       <label>
         <input name="createDelegation" type="checkbox" defaultChecked />
-        Create wsfe delegation
+        Registrar la delegación de servicio web de facturación
       </label>
-      <button type="submit">Create client</button>
-      {feedback ? <p>{feedback}</p> : null}
-      {error ? <p>{error}</p> : null}
+      <button type="submit">Crear cliente</button>
+      {feedback ? <p role="status">{feedback}</p> : null}
+      {error ? <p role="alert">{error}</p> : null}
     </form>
   );
 }

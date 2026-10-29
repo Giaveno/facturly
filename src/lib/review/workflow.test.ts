@@ -77,7 +77,7 @@ describe("review workflow — invoice status machine (server-side)", () => {
       .returning();
     const [row] = await db
       .insert(ocrRows)
-      .values({
+      .values({recipientMode:"identified",taxRate:21,
         photoId: photo!.id,
         fields: { name: "PAGADOR S.A.", amount: 121000, date: "2026-09-22" },
         confidence: { name: 0.9, amount: 0.9 },
@@ -96,7 +96,7 @@ describe("review workflow — invoice status machine (server-side)", () => {
     expect(ctx.invoice.importeTotalCentavos).toBe(121000);
   });
 
-  it("materializes a BLOCKED row as PENDING; a corrected row becomes REVIEWED", async () => {
+  it("materializes a BLOCKED row as PENDING; a corrected row still awaits explicit review", async () => {
     const rowId = await seedRow("BLOCKED", "30710145764");
     const inv = await materializeInvoice(db, rowId);
     expect(inv.status).toBe("PENDING");
@@ -104,7 +104,7 @@ describe("review workflow — invoice status machine (server-side)", () => {
     // The human corrects the row, then the invoice re-syncs to REVIEWED.
     await db.update(ocrRows).set({ status: "CORRECTED" }).where(eq(ocrRows.id, rowId));
     const resynced = await materializeInvoice(db, rowId);
-    expect(resynced.status).toBe("REVIEWED");
+    expect(resynced.status).toBe("PENDING");
   });
 
   it("markInvoiceReviewed: PENDING → REVIEWED, and refuses a non-PENDING invoice", async () => {
@@ -118,6 +118,7 @@ describe("review workflow — invoice status machine (server-side)", () => {
   it("approveInvoice: RI → Monotributista resolves Factura A(1) + DocTipo 80 + condition id 6 + 21% IVA", async () => {
     const rowId = await seedRow("CORRECTED", "30710145764"); // monotributista payer
     const inv = await materializeInvoice(db, rowId);
+    await markInvoiceReviewed(db, inv.id);
     const approved = await approveInvoice(db, gateway, inv.id, () => FIXED_DATE);
 
     expect(approved.status).toBe("APPROVED");
@@ -142,27 +143,19 @@ describe("review workflow — invoice status machine (server-side)", () => {
   it("approveInvoice: RI → RI resolves Factura A(1) + DocTipo 80 + condition id 1", async () => {
     const rowId = await seedRow("CORRECTED", "20123456786"); // ri payer
     const inv = await materializeInvoice(db, rowId);
+    await markInvoiceReviewed(db, inv.id);
     const approved = await approveInvoice(db, gateway, inv.id, () => FIXED_DATE);
     expect(approved.cbteTipo).toBe(1);
     expect(approved.receptorDocTipo).toBe(80); // CUIT document type
     expect(approved.condicionIvaReceptorId).toBe(1); // ri (RG 5616)
   });
 
-  it("approveInvoice: no payer CUIT → flags for review (never silently Consumidor Final)", async () => {
+  it("missing payer CUIT cannot be confirmed or approved", async () => {
     const rowId = await seedRow("CORRECTED", null);
     const inv = await materializeInvoice(db, rowId);
-    await expect(
-      approveInvoice(db, gateway, inv.id, () => FIXED_DATE),
-    ).rejects.toThrow(/payer CUIT is missing or invalid/);
-    // Not approved — still REVIEWED.
-    const ctx = await loadInvoiceContext(db, inv.id);
-    expect(ctx.invoice.status).toBe("REVIEWED");
-    // W1: flagged for review in the audit trail (not a silent Factura B).
-    const audits = await db
-      .select()
-      .from(auditLog)
-      .where(eq(auditLog.invoiceId, inv.id));
-    expect(audits.some((a) => a.action === "invoice.flagged_review")).toBe(true);
+    await expect(markInvoiceReviewed(db,inv.id)).rejects.toThrow(InvoiceStateError);
+    await expect(approveInvoice(db,gateway,inv.id)).rejects.toThrow(InvoiceStateError);
+    expect((await loadInvoiceContext(db,inv.id)).invoice.status).toBe("PENDING");
   });
 
   it("approveInvoice refuses a PENDING (not yet reviewed) invoice", async () => {
@@ -176,12 +169,15 @@ describe("review workflow — invoice status machine (server-side)", () => {
   it("approveInvoice fails loudly on an unresolved payer condition (never CF)", async () => {
     const rowId = await seedRow("CORRECTED", "20345678906"); // valid CUIT, absent from Padrón A5
     const inv = await materializeInvoice(db, rowId);
+    await markInvoiceReviewed(db,inv.id);
     await expect(
       approveInvoice(db, gateway, inv.id, () => FIXED_DATE),
     ).rejects.toThrow(/no Padrón A5 condition/);
     // The invoice must NOT have been approved.
     const ctx = await loadInvoiceContext(db, inv.id);
     expect(ctx.invoice.status).toBe("REVIEWED");
+    const audits = await db.select().from(auditLog).where(eq(auditLog.invoiceId,inv.id));
+    expect(audits.some(a=>a.action==="invoice.flagged_review")).toBe(true);
   });
 
   it("rejectInvoice discards with a reason and soft-retains the row", async () => {
@@ -231,6 +227,7 @@ describe("review workflow — invoice status machine (server-side)", () => {
   it("rejectInvoice refuses an already-approved invoice", async () => {
     const rowId = await seedRow("CORRECTED", "30710145764");
     const inv = await materializeInvoice(db, rowId);
+    await markInvoiceReviewed(db, inv.id);
     await approveInvoice(db, gateway, inv.id, () => FIXED_DATE);
     await expect(rejectInvoice(db, inv.id, "changed my mind")).rejects.toThrow(
       InvoiceStateError,

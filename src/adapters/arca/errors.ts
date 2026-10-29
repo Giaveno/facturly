@@ -13,11 +13,14 @@
  *   - `ArcaAuthError`      — token/sign/delegation/certificate failures. The
  *     caller should evict the TA and retry ONCE with a fresh ticket.
  *
- * Security: error messages surface ARCA `faultcode`/`faultstring`/codes, which
- * are fine to log; token/sign/private-key material is NEVER attached here.
+ * Security: SOAP text is untrusted. HTTP and emission boundaries retain only
+ * fixed categories and bounded numeric codes, never arbitrary provider text.
  */
 
 import { XMLParser } from "fast-xml-parser";
+import { safeQueryDiagnostic, type QueryCategory } from "./query-diagnostics";
+
+export type EmissionStage = "ultimo" | "issuance";
 
 /** The three failure classes ARCA integration distinguishes. */
 export type ArcaErrorKind = "transient" | "business" | "auth";
@@ -35,6 +38,10 @@ export interface ArcaErrorOptions {
   /** Seconds to wait before retrying, from a 429 `Retry-After` header. */
   retryAfterMs?: number;
   cause?: unknown;
+  stage?: EmissionStage;
+  category?: QueryCategory;
+  providerCodes?: number[];
+  httpStatus?: number;
 }
 
 /** Base class for every typed ARCA failure. */
@@ -44,6 +51,10 @@ export class ArcaError extends Error {
   readonly faultcode?: string;
   readonly faultstring?: string;
   readonly retryAfterMs?: number;
+  readonly stage?: EmissionStage;
+  readonly category?: QueryCategory;
+  readonly providerCodes?: number[];
+  readonly httpStatus?: number;
 
   constructor(options: ArcaErrorOptions) {
     super(options.message, { cause: options.cause });
@@ -53,6 +64,10 @@ export class ArcaError extends Error {
     this.faultcode = options.faultcode;
     this.faultstring = options.faultstring;
     this.retryAfterMs = options.retryAfterMs;
+    this.stage = options.stage;
+    this.category = options.category;
+    this.providerCodes = options.providerCodes;
+    this.httpStatus = options.httpStatus;
   }
 }
 
@@ -78,6 +93,26 @@ export class ArcaAuthError extends ArcaError {
     super({ ...options, kind: "auth", message });
     this.name = "ArcaAuthError";
   }
+}
+
+/** Rebuild boundary errors from allowlisted metadata, never provider text or causes. */
+export function safeEmissionError(err: unknown, stage: EmissionStage): ArcaError {
+  const typed = err instanceof ArcaError ? err : undefined;
+  const code = typed?.code && /^\d{1,9}$/.test(typed.code) ? typed.code : undefined;
+  const diagnostic = safeQueryDiagnostic({
+    stage: "wsfe",
+    category: typed?.category ?? (code ? "provider-errors" : typed ? "http" : "internal"),
+    providerCodes: typed?.providerCodes ?? (code ? [Number(code)] : undefined),
+    httpStatus: typed?.httpStatus,
+  }) ?? { stage: "wsfe", category: "internal" };
+  const details = {
+    stage, category: diagnostic.category, code,
+    providerCodes: diagnostic.providerCodes, httpStatus: diagnostic.httpStatus,
+  };
+  const message = `ARCA ${stage} failed (${diagnostic.category}${code ? `, code=${code}` : ""})` + (stage === "issuance" && diagnostic.category === "malformed-response" ? "; outcome uncertain; read-only verification required" : "");
+  if (typed?.kind === "business") return new ArcaBusinessError(message, details);
+  if (typed?.kind === "auth") return new ArcaAuthError(message, details);
+  return new ArcaTransientError(message, details);
 }
 
 /** A parsed SOAP 1.1 `Fault` (surfaced instead of being discarded). */
@@ -146,7 +181,6 @@ export function classifyFaultCode(faultcode: string | undefined): ArcaErrorKind 
 const AUTH_ERROR_CODES = new Set([
   "600",
   "601",
-  "602",
   "603",
   "604",
   "605",
@@ -164,8 +198,10 @@ const AUTH_ERROR_CODES = new Set([
   "1007",
 ]);
 
-/** ARCA canonical "already authorized" signal (idempotency). */
-export const DUPLICATE_ERROR_CODES = new Set(["10015", "10016"]);
+/** Legacy lookup category, NOT proof of authorization. 10016 can indicate a
+ * numbering/date conflict; only matching FECompConsultar evidence resolves it.
+ * 10015 is recipient-document validation and must never imply a duplicate. */
+export const DUPLICATE_ERROR_CODES = new Set(["10016"]);
 
 /** Classifies an ARCA validation code for the gateway's retry/evict logic. */
 export function classifyArcaErrorCode(

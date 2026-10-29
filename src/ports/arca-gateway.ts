@@ -49,6 +49,8 @@ export interface FECAEReq {
   importeIva: Centavos;
   /** Total amount in integer centavos. */
   importeTotal: Centavos;
+  /** Explicit single taxable rate; mandatory for newly approved A/B. */
+  taxRate?: number | null;
 }
 
 /** Successful emission result. */

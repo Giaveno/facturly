@@ -44,6 +44,13 @@ export const emitBatchJob = inngest.createFunction(
         invoiceIds,
       ),
     );
-    return { emitted: results.length };
+    return {
+      emitted: results.filter(result => result.outcome === "emitted").length,
+      alreadyEmitted: results.filter(result => result.outcome === "already_emitted").length,
+      failed: results.filter(result => result.outcome.startsWith("failed_")).length,
+      outcomes: results.map(({ invoiceId, outcome, stage, category, arcaCode, providerCodes, httpStatus }) => ({
+        invoiceId, outcome, stage, category, arcaCode, providerCodes, httpStatus,
+      })),
+    };
   },
 );

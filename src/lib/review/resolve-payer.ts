@@ -1,17 +1,9 @@
-/**
- * Payer CUIT resolution — unblocks flagged rows (no/invalid payer CUIT).
- *
- * A bank-transfer receipt generally omits the sender CUIT; the row is flagged
- * for review and cannot be emitted. The accountant enters the payer's CUIT here:
- *   1. the CUIT is validated with the Mod-11 check,
- *   2. the GLOBAL payer registry LEARNS it (match by CBU/CVU/alias/name → update,
- *      else insert with `learnedFrom = 'manual'`),
- *   3. the OCR row is marked CORRECTED so the invoice follows the documented
- *      CORRECTED ⇒ REVIEWED path (via `materializeInvoice`, the existing
- *      transition — no new transition is invented),
- *   4. the resolution is audited.
+/** Manual CUIT resolution teaches the registry but never confirms review.
+ * The OCR row becomes CORRECTED; its invoice remains PENDING until the
+ * accountant explicitly confirms all required receipt fields.
  */
 
+import { withRowLock } from "./locks";
 import { eq } from "drizzle-orm";
 import { invoices, ocrRows } from "@/lib/db/schema";
 import { isValidCuit } from "@/domain/cuit";
@@ -78,17 +70,14 @@ export interface ResolvePayerResult {
   inserted: boolean;
 }
 
-/**
- * Resolves a flagged row's payer CUIT, teaching the registry and promoting the
- * row to CORRECTED (invoice → REVIEWED). Returns the materialized invoice state
- * so the caller can confirm the row is now approvable.
- */
-export async function resolvePayerCuit(
+/** Records a manually resolved CUIT; saving always invalidates prior confirmation. */
+async function resolvePayerCuitLocked(
   db: Db,
   rowId: string,
   cuit: string,
 ): Promise<ResolvePayerResult> {
-  if (!isValidCuit(cuit)) {
+  cuit = cuit.replace(/[ -]/g, "");
+  if (!/^\d{11}$/.test(cuit) || !isValidCuit(cuit)) {
     throw new PayerCuitInvalidError(cuit);
   }
 
@@ -129,11 +118,12 @@ export async function resolvePayerCuit(
   // Record the CUIT on the row and mark it CORRECTED (source: manual entry).
   await db
     .update(ocrRows)
-    .set({ cuit, cuitSource: "manual", status: "CORRECTED" })
+    .set({ cuit, cuitSource: "manual", recipientMode: "identified", recipientModeSource: "manual", status: "CORRECTED" })
     .where(eq(ocrRows.id, rowId));
 
-  // CORRECTED ⇒ REVIEWED via the existing status machine (no new transition).
+  // Resolution does not confirm review or authorize fiscal approval.
   const invoice = await materializeInvoice(db, rowId);
+  await db.update(invoices).set({status:"PENDING",importeTotalCentavos:row.fields.amount}).where(eq(invoices.id,invoice.id));
 
   await writeAudit(db, {
     actor: "accountant",
@@ -147,8 +137,10 @@ export async function resolvePayerCuit(
     rowId,
     status: "CORRECTED",
     invoiceId: invoice.id,
-    invoiceStatus: invoice.status,
+    invoiceStatus: "PENDING",
     learnedFrom: payer.learnedFrom,
     inserted: payer.inserted,
   };
 }
+
+export function resolvePayerCuit(db: Db,rowId: string,cuit: string) { return withRowLock(db,rowId,tx=>resolvePayerCuitLocked(tx,rowId,cuit)); }

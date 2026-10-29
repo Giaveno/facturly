@@ -1,21 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The recover job is a THIN adapter over the already-tested
 // `recoverStuckEmissions`. Here we prove the C2 wiring that was previously
 // MISSING: the scheduled (cron) function is defined and its handler delegates
 // to the recovery service. Its heavy production dependencies (Neon client, ARCA
-// gateway, env switch) are mocked — the Inngest platform itself (scheduler,
+// gateway) are mocked — the Inngest platform itself (scheduler,
 // event delivery) is not exercised offline.
 vi.mock("@/lib/emission/emission-service", () => ({
   recoverStuckEmissions: vi.fn(),
 }));
 vi.mock("@/lib/emission/gateway", () => ({ buildArcaGateway: vi.fn() }));
 vi.mock("@/lib/db/client", () => ({ getDb: vi.fn() }));
-vi.mock("@/adapters/arca/emissions", () => ({
-  readEmissionsEnabled: vi.fn(() => false),
-}));
-
 import { recoverStuckEmissions } from "@/lib/emission/emission-service";
+import { buildArcaGateway } from "@/lib/emission/gateway";
+import { getDb } from "@/lib/db/client";
 import { recoverStuckEmissionsJob } from "./recover";
 
 type JobLike = {
@@ -24,6 +22,14 @@ type JobLike = {
 };
 
 describe("recoverStuckEmissionsJob — scheduled recovery wiring (C2)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("is defined with the recovery id and a scheduled cron trigger", () => {
     expect(recoverStuckEmissionsJob).toBeDefined();
     const { opts } = recoverStuckEmissionsJob as unknown as JobLike;
@@ -35,16 +41,50 @@ describe("recoverStuckEmissionsJob — scheduled recovery wiring (C2)", () => {
     expect(cron!.cron).toBe("*/15 * * * *");
   });
 
-  it("handler delegates to recoverStuckEmissions", async () => {
+  it.each([undefined, "false", "", "1", "yes"])(
+    "skips without dependencies when EMISSIONS_ENABLED is %s",
+    async (value) => {
+      vi.stubEnv("EMISSIONS_ENABLED", value);
+      const { fn } = recoverStuckEmissionsJob as unknown as JobLike;
+      const step = { run: vi.fn(async (_id: string, run: () => unknown) => run()) };
+
+      await expect(fn({ step })).resolves.toEqual({
+        recovered: 0,
+        skipped: true,
+        reason: "emissions-disabled",
+      });
+
+      expect(getDb).not.toHaveBeenCalled();
+      expect(buildArcaGateway).not.toHaveBeenCalled();
+      expect(recoverStuckEmissions).not.toHaveBeenCalled();
+      expect(step.run).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["true", " TRUE "])("delegates when EMISSIONS_ENABLED is %s", async (value) => {
+    vi.stubEnv("EMISSIONS_ENABLED", value);
     const recover = vi.mocked(recoverStuckEmissions);
+    const db = {} as ReturnType<typeof getDb>;
+    const gateway = {} as ReturnType<typeof buildArcaGateway>;
+    vi.mocked(getDb).mockReturnValue(db);
+    vi.mocked(buildArcaGateway).mockReturnValue(gateway);
     recover.mockResolvedValue([
       { invoiceId: "invoice-1", outcome: "emitted", cbteNro: 4 },
     ] as never);
 
     const { fn } = recoverStuckEmissionsJob as unknown as JobLike;
-    const step = { run: async (_id: string, run: () => unknown) => run() };
-    await fn({ step });
+    const step = { run: vi.fn(async (_id: string, run: () => unknown) => run()) };
+    await expect(fn({ step })).resolves.toEqual({ recovered: 1 });
 
+    expect(step.run).toHaveBeenCalledWith("recover-stuck", expect.any(Function));
+    expect(getDb).toHaveBeenCalledTimes(2);
+    expect(buildArcaGateway).toHaveBeenCalledExactlyOnceWith(db);
     expect(recover).toHaveBeenCalledTimes(1);
+    expect(recover).toHaveBeenCalledWith({
+      db,
+      gateway,
+      emissionsEnabled: true,
+      delayMs: 1000,
+    });
   });
 });

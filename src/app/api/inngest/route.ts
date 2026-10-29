@@ -1,3 +1,4 @@
+import { cleanupReceiptsJob } from "@/jobs/cleanup-receipts";
 import { serve, type RequestHandler } from "inngest/next";
 import { inngest } from "@/lib/inngest/client";
 import { resolveInngestSigningKey } from "@/lib/inngest/config";
@@ -18,7 +19,7 @@ import { recoverStuckEmissionsJob } from "@/jobs/recover";
  */
 const inngestHandlers = serve({
   client: inngest,
-  functions: [emitBatchJob, processOcrRowJob, recoverStuckEmissionsJob],
+  functions: [emitBatchJob, processOcrRowJob, recoverStuckEmissionsJob, cleanupReceiptsJob],
 });
 
 /**

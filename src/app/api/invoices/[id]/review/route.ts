@@ -58,7 +58,7 @@ export async function POST(
     return NextResponse.json(result);
   } catch (err) {
     if (err instanceof InvoiceStateError) {
-      return errorJson(409, "Invoice is not in a reviewable state", correlationId);
+      return errorJson(409, err.publicMessage ?? "Invoice is not in a reviewable state", correlationId);
     }
     console.error(`[review] ${correlationId} failed`, err);
     return errorJson(500, "Failed to mark invoice reviewed", correlationId);

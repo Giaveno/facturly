@@ -24,6 +24,7 @@ import {
   type KeyObject,
 } from "node:crypto";
 import { isValidCuit } from "@/domain/cuit";
+import { certificateFingerprint } from "@/adapters/arca/credential-ta-cache";
 
 /** Thrown when a PEM cannot be parsed as the expected object (mapped to 400). */
 export class InvalidPemError extends Error {
@@ -43,6 +44,7 @@ export class KeyMismatchError extends Error {
 
 /** Public metadata about an uploaded certificate (never key material). */
 export interface CertificateInfo {
+  fingerprint: string;
   /** The certificate subject's Common Name. */
   subjectCn: string;
   /** A Mod-11-valid CUIT found in the subject, or null. */
@@ -121,6 +123,7 @@ export function inspectCertificate(certPem: string): CertificateInfo {
   const cert = parseCertificatePem(certPem);
   const subject = cert.subject;
   return {
+    fingerprint: certificateFingerprint(certPem),
     subjectCn: extractSubjectCn(subject),
     cuit: extractCuit(subject),
     notBefore: cert.validFrom,

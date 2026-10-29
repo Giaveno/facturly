@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { eq } from "drizzle-orm";
 import { createTestDb } from "@/test-support/test-db";
 import {
   auditLog,
@@ -11,6 +12,11 @@ import {
 } from "@/lib/db/schema";
 import { listIssuedInvoices, loadIssuedInvoicePdfInput } from "./read-model";
 import type { Db } from "@/lib/db/types";
+import { createInvoiceConsultation, loadReservedInvoice, listReservedAttempts } from "./reconciliation";
+import { generateSelfSignedCert } from "@/test-support/pkcs7";
+import { encryptPrivateKey, deriveAesKey } from "@/lib/db/credentials";
+import { inspectCertificate } from "@/lib/credentials/pem";
+import { WSAA_HOMOLOGACION_URL } from "@/adapters/arca/constants";
 
 /**
  * Invoices read-model — the queries behind the Invoices page and the PDF
@@ -132,6 +138,12 @@ describe("invoices read-model", () => {
     expect(input!.receptorRazonSocial).toBe("ACME S.A.");
     expect(input!.importeTotal).toBe(121000);
   });
+  it("pins PDF/QR issuer CUIT and PV to the issuance reservation, not mutable client settings",async()=>{
+    const invoiceId=await seedIssued({cae:"70000000000001"});
+    await db.update(clients).set({cuit:"20123456786",ptoVta:2}).where(eq(clients.id,clientId));
+    try {expect(await loadIssuedInvoicePdfInput(db,invoiceId)).toMatchObject({cuit:"20123456789",ptoVta:1});}
+    finally {await db.update(clients).set({cuit:"20123456789",ptoVta:1}).where(eq(clients.id,clientId));}
+  });
 
   it("excludes a NULL-CAE reservation from the issued list (and still refuses the PDF)", async () => {
     const invoiceId = await seedIssued({ cae: null });
@@ -158,5 +170,41 @@ describe("invoices read-model", () => {
     await expect(
       loadIssuedInvoicePdfInput(db, "00000000-0000-4000-8000-000000000000"),
     ).resolves.toBeNull();
+  });
+
+  it("lists real NULL-CAE attempts in every local state without treating legacy environment as safe", async () => {
+    const invoiceId = await seedIssued({ cae: null });
+    for (const status of ["EMIT_FAILED", "EMIT_ERROR", "EMITTING", "APPROVED"] as const) {
+      await db.update(invoices).set({ status }).where(eq(invoices.id, invoiceId));
+      expect(await listReservedAttempts(db)).toEqual([expect.objectContaining({ invoiceId, status, canConsult: false, cbteNro: 1 })]);
+      expect(await listIssuedInvoices(db)).toEqual([]);
+    }
+  });
+
+  it("consults the persisted tuple with zero fiscal/audit writes and does not unlock PDF after a matching lookup", async () => {
+    const invoiceId = await seedIssued({ cae: null, cbteNro: 7 });
+    const snapshot = { rowId: "row", name: "ACME S.A.", cuit: "20123456786", recipientMode: "identified" as const, taxRate: 21, date: "2026-09-22", amount: 121000, issuerCuit: "30710145764", issuerName: "TEST", issuerCondition: "monotributista" as const, ptoVta: 1, environment: "homologacion" as const };
+    await db.update(invoices).set({ status: "EMIT_FAILED", approvalSnapshot: snapshot }).where(eq(invoices.id, invoiceId));
+    await db.update(issuedInvoices).set({ cuit: snapshot.issuerCuit }).where(eq(issuedInvoices.invoiceId, invoiceId));
+    const before = { invoices: await db.select().from(invoices), issued: await db.select().from(issuedInvoices), audits: await db.select().from(auditLog) };
+    const pair = generateSelfSignedCert("OFFLINE TEST");
+    const stored = { certPem: pair.certPem, encryptedKey: encryptPrivateKey(pair.keyPem, deriveAesKey("01".repeat(32))) };
+    const key = `${WSAA_HOMOLOGACION_URL}:${inspectCertificate(pair.certPem).fingerprint}:wsfe`;
+    const query = createInvoiceConsultation({
+      env: { ARCA_ENV: "homologacion", AES_KEY: "01".repeat(32), EMISSIONS_ENABLED: "false" },
+      getReservation: id => loadReservedInvoice(db, id), repository: { get: async () => stored },
+      store: { get: async k => k === key ? { token: "TOKEN", sign: "SIGN", expiresAt: Date.now() + 3600000, issuedAt: Date.now() } : null, put: async () => { throw new Error("Unexpected cache write"); } },
+      fetchFn: async (_url, init) => {
+        expect(init?.body).toContain("<ar:Cuit>30710145764</ar:Cuit>");
+        expect(init?.body).toContain("<ar:CbteNro>7</ar:CbteNro>");
+        expect(init?.body).not.toMatch(/FECAESolicitar|FECompUltimoAutorizado/);
+        return new Response(`<Envelope><Body><FECompConsultarResponse><FECompConsultarResult><ResultGet><Resultado>A</Resultado><EmisionTipo>CAE</EmisionTipo><CodAutorizacion>70212345678901</CodAutorizacion><FchVto>20261002</FchVto><CbteDesde>7</CbteDesde><CbteHasta>7</CbteHasta><CbteFch>20260922</CbteFch><PtoVta>1</PtoVta><CbteTipo>1</CbteTipo><DocTipo>80</DocTipo><DocNro>20123456786</DocNro><ImpTotal>1210.00</ImpTotal><ImpNeto>1000.00</ImpNeto><ImpIVA>210.00</ImpIVA><MonId>PES</MonId><MonCotiz>1</MonCotiz></ResultGet></FECompConsultarResult></FECompConsultarResponse></Body></Envelope>`);
+      },
+    });
+    expect(await query(invoiceId)).toMatchObject({ status: "matched", cae: "70212345678901" });
+    expect({ invoices: await db.select().from(invoices), issued: await db.select().from(issuedInvoices), audits: await db.select().from(auditLog) }).toEqual(before);
+    expect(await listIssuedInvoices(db)).toEqual([]);
+    expect(await loadIssuedInvoicePdfInput(db, invoiceId)).toBeNull();
+    expect(await listReservedAttempts(db)).toEqual([expect.objectContaining({ invoiceId, status: "EMIT_FAILED", canConsult: true })]);
   });
 });

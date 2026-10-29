@@ -189,7 +189,7 @@ describe("offline pipeline: upload → OCR → row persists", () => {
     expect(isRowEmittable("FAILED")).toBe(false);
   });
 
-  it("a BLOCKED row cannot emit; a CORRECTED row becomes emittable (REVIEWED)", async () => {
+  it("a BLOCKED row cannot emit; a CORRECTED row becomes eligible for explicit review", async () => {
     const result = await processUpload(
       clientAId,
       [{ storageKey: "blocked.jpg", image: lowConfidence }],
@@ -210,7 +210,7 @@ describe("offline pipeline: upload → OCR → row persists", () => {
     // CORRECTED ⇒ emittable, invoice becomes REVIEWED.
     expect(isRowEmittable(corrected.status)).toBe(true);
     expect(() => assertRowEmittable(corrected.status)).not.toThrow();
-    expect(invoiceStatusForRow("CORRECTED")).toBe("REVIEWED");
+    expect(invoiceStatusForRow("CORRECTED")).toBe("PENDING");
   });
 
   it("keeps batches isolated across clients", async () => {

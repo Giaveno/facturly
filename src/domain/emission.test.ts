@@ -52,7 +52,7 @@ describe("invoice status mapping (dual status machine)", () => {
   });
 
   it("maps CORRECTED ⇒ invoice becomes REVIEWED", () => {
-    expect(invoiceStatusForRow("CORRECTED")).toBe("REVIEWED");
+    expect(invoiceStatusForRow("CORRECTED")).toBe("PENDING");
   });
 
   it("maps CONFIDENT ⇒ invoice stays PENDING (awaiting review)", () => {

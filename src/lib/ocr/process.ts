@@ -8,6 +8,7 @@
  * PENDING is returned untouched (no re-read, no double OCR).
  */
 
+import { withRowLock } from "@/lib/review/locks";
 import { eq } from "drizzle-orm";
 import { ocrRows, photos } from "@/lib/db/schema";
 import { classifyOcrRowStatus } from "@/lib/pipeline/ingest";
@@ -30,7 +31,7 @@ export async function processOcrRow(
   getImage: ImageReader,
 ): Promise<{ id: string; status: string }> {
   const [row] = await db.select().from(ocrRows).where(eq(ocrRows.id, rowId));
-  if (!row) throw new Error(`processOcrRow: no OCR row ${rowId}`);
+  if (!row) return { id: rowId, status: "DELETED" };
   if (row.status !== "PENDING") {
     return { id: row.id, status: row.status };
   }
@@ -39,46 +40,35 @@ export async function processOcrRow(
     .select()
     .from(photos)
     .where(eq(photos.id, row.photoId));
-  if (!photo) throw new Error(`processOcrRow: no photo for OCR row ${rowId}`);
+  if (!photo) return withRowLock(db, rowId, async tx => {
+    const [current] = await tx.select({id: ocrRows.id}).from(ocrRows).where(eq(ocrRows.id, rowId));
+    if (!current) return {id: rowId, status: "DELETED"};
+    throw new Error(`processOcrRow: no photo for OCR row ${rowId}`);
+  });
 
+  // External OCR must not block deletion. Re-read under the mutation lock afterwards.
+  let result: Awaited<ReturnType<OcrProvider["extract"]>>;
   try {
     const image = await getImage(photo.storageKey);
-    const result = await ocr.extract(image);
-    const status = classifyOcrRowStatus(result.confidence);
-
-    // A valid OCR CUIT wins; otherwise try the registry READ side so a known
-    // payer arrives already carrying its CUIT (no manual re-entry per invoice).
-    const { cuit, cuitSource, matchedBy } = await resolveRowCuit(db, result);
-    if (matchedBy) {
-      await writeAudit(db, {
-        actor: "system",
-        action: "payer.cuit_registry_resolved",
-        rowId,
-        payload: { matchedBy },
-      });
-    }
-
-    await db
-      .update(ocrRows)
-      .set({
-        fields: result.fields,
-        confidence: result.confidence,
-        cuit,
-        cuitSource,
-        status,
-        error: null,
-      })
-      .where(eq(ocrRows.id, rowId));
-
-    return { id: rowId, status };
+    result = await ocr.extract(image);
   } catch (err) {
-    // W7: a crashed extraction must be visible and actionable — mark the row
-    // FAILED with the reason, never leave it PENDING ("in progress") forever.
-    const message = err instanceof Error ? err.message : String(err);
-    await db
-      .update(ocrRows)
-      .set({ status: "FAILED", error: message })
-      .where(eq(ocrRows.id, rowId));
-    return { id: rowId, status: "FAILED" };
+    return withRowLock(db, rowId, async tx => {
+      const [current] = await tx.select().from(ocrRows).where(eq(ocrRows.id, rowId));
+      if (!current) return {id: rowId, status: "DELETED"};
+      if (current.status !== "PENDING") return {id: rowId, status: current.status};
+      const message = err instanceof Error ? err.message : String(err);
+      await tx.update(ocrRows).set({status: "FAILED", error: message}).where(eq(ocrRows.id, rowId));
+      return {id: rowId, status: "FAILED"};
+    });
   }
+  return withRowLock(db, rowId, async tx => {
+    const [current] = await tx.select().from(ocrRows).where(eq(ocrRows.id, rowId));
+    if (!current) return {id: rowId, status: "DELETED"};
+    if (current.status !== "PENDING") return {id: rowId, status: current.status};
+    const status = classifyOcrRowStatus(result.confidence);
+    const {cuit, cuitSource, matchedBy} = await resolveRowCuit(tx, result, current.recipientMode);
+    if (matchedBy) await writeAudit(tx, {actor: "system", action: "payer.cuit_registry_resolved", rowId, payload: {matchedBy}});
+    await tx.update(ocrRows).set({fields: result.fields, confidence: result.confidence, cuit, cuitSource, status, error: null}).where(eq(ocrRows.id, rowId));
+    return {id: rowId, status};
+  });
 }
