@@ -1,3 +1,5 @@
+import { eq } from "drizzle-orm";
+import { invoices } from "@/lib/db/schema";
 import { tracePhase, withEmissionTrace } from "@/lib/emission/trace";
 /** Review approvals use only the canonical fiscal service and a stable invoice key. */
 
@@ -20,6 +22,7 @@ export const emitBatchJob = inngest.createFunction(
     triggers: [{ event: "emit/batch.requested" }],
 
     retries: 3,
+    timeouts: { finish: "30m" },
 
     // C3: idempotency keyed on the sender-provided key (per-invoice approval
 
@@ -42,25 +45,17 @@ export const emitBatchJob = inngest.createFunction(
 
     }
 
-    const results = await step.run("emit-batch", () =>
-
-      emitReviewedBatch(
-
-        {
-
-          db: getDb(),
-
-          gateway: buildArcaGateway(getDb()),
-
-          env: process.env,
-
-        },
-
-        invoiceIds,
-
-      ),
-
-    );
+    const ids = [...new Set(invoiceIds ?? await step.run("approved-review-ids", async () =>
+      (await getDb().select({ id: invoices.id }).from(invoices).where(eq(invoices.status, "APPROVED"))).map(row => row.id),
+    ))];
+    const results: Awaited<ReturnType<typeof emitReviewedBatch>> = [];
+    // Checkpoint each invoice: a batch is never one unbounded HTTP operation.
+    for (const invoiceId of ids) {
+      const outcomes = await step.run(`emit-invoice-${invoiceId}`, () => emitReviewedBatch({
+        db: getDb(), gateway: buildArcaGateway(getDb()), env: process.env,
+      }, [invoiceId]));
+      results.push(...outcomes);
+    }
 
     return {
 

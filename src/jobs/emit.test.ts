@@ -31,5 +31,19 @@ describe("emission job truthful safe summary", () => {
     expect(await runJob()).toMatchObject({ emitted: 1, alreadyEmitted: 1, failed: 3 });
   });
 });
-
-
+
+
+
+
+
+it("checkpoints distinct invoices separately instead of one batch request", async () => {
+  vi.mocked(readEmissionsEnabled).mockReturnValue(true);
+  vi.mocked(emitReviewedBatch).mockResolvedValue([]);
+  const steps: string[] = [];
+  await (emitBatchJob as unknown as { fn: (ctx: unknown) => Promise<unknown> }).fn({
+    event: { id: "job-checkpoint", data: { invoiceIds: ["one", "two", "one"] } },
+    step: { run: async (id: string, work: () => unknown) => { steps.push(id); return work(); } },
+  });
+  expect(steps).toEqual(["emit-invoice-one", "emit-invoice-two"]);
+  expect(vi.mocked(emitReviewedBatch).mock.calls.slice(-2).map(call => call[1])).toEqual([["one"], ["two"]]);
+});

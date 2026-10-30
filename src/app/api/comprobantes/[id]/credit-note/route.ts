@@ -1,3 +1,5 @@
+/** Deployment budget; local Next.js does not enforce this host hint. */
+export const maxDuration = 600;
 import { fiscalDate } from "@/domain/fiscal-date";
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";

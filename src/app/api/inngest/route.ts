@@ -1,3 +1,5 @@
+/** Deployment budget; local Next.js does not enforce this host hint. */
+export const maxDuration = 600;
 import { cleanupReceiptsJob } from "@/jobs/cleanup-receipts";
 import { serve, type RequestHandler } from "inngest/next";
 import { inngest } from "@/lib/inngest/client";

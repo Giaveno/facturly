@@ -8,7 +8,7 @@ import { isUuid } from "@/lib/upload/guard";
 import { buildArcaGateway } from "@/lib/emission/gateway";
 import { verifyComprobante, ComprobanteEmissionError } from "@/lib/emission/comprobante-emission-service";
 
-export const maxDuration = 120;
+export const maxDuration = 600;
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   try {
     assertSameOrigin(req);
