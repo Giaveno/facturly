@@ -6,10 +6,11 @@ import { ArcaGatewayFake } from "@/adapters/arca/arca-gateway.fake";
 import type { ArcaGateway } from "@/ports/arca-gateway";
 import type { Db } from "@/lib/db/types";
 import { createTestDb } from "@/test-support/test-db";
-import { clients, comprobantes, emissionSeriesClaims } from "@/lib/db/schema";
+import { clients, comprobantes, emissionSeriesClaims, batches, photos, ocrRows, invoices, issuedInvoices } from "@/lib/db/schema";
 import {
   emitComprobante,
   recoverSeriesClaim,
+  verifyComprobante,
   EMISSION_UNCERTAIN_REASON,
   IDEMPOTENCY_CONFLICT_REASON,
   RECONCILIATION_NOT_FOUND_REASON,
@@ -38,6 +39,11 @@ describe("comprobante emission service", () => {
   beforeEach(async () => {
     await handle.db.delete(comprobantes);
     await handle.db.delete(emissionSeriesClaims);
+    await handle.db.delete(issuedInvoices);
+    await handle.db.delete(invoices);
+    await handle.db.delete(ocrRows);
+    await handle.db.delete(photos);
+    await handle.db.delete(batches);
     await handle.db.delete(clients);
   });
 
@@ -65,7 +71,7 @@ describe("comprobante emission service", () => {
       getIvaCondition: base.getIvaCondition.bind(base),
       ultimoAutorizado: base.ultimoAutorizado.bind(base),
       consultInvoice: base.consultInvoice.bind(base),
-      issueInvoice: async () => { throw new Error("network timeout"); },
+      issueInvoice: async (_req: unknown, _before: unknown, sent?: () => void) => { sent?.(); throw new Error("network timeout"); },
     };
     await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now, uncertainGraceMs: 0 }, input(empresa, "generation-a"));
     const key = seriesKey("homologacion", "20123456786", 1, 1);
@@ -85,6 +91,65 @@ describe("comprobante emission service", () => {
     const [row] = await handle.db.insert(clients).values({ cuit, razonSocial: "Empresa", ptoVta: 1, condicionIva: "ri" }).returning();
     return row!.id;
   }
+
+  it.each(["login WSAA: certificado inválido", "armado del pedido: fecha inválida"])("keeps a pre-dispatch failure local: %s", async (cause) => {
+    const empresa = await company();
+    const base = new ArcaGatewayFake(undefined, now);
+    const gateway = { getIvaCondition: base.getIvaCondition.bind(base), ultimoAutorizado: base.ultimoAutorizado.bind(base), issueInvoice: async () => { throw new Error(cause); } };
+    const failed = await emitComprobante({ db: handle.db, gateway, now, env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" } }, input(empresa));
+    expect(failed).toMatchObject({ estado: "rechazado", resultado: "L", errores: `Fallo local antes de enviar a ARCA: ${cause}` });
+    expect((await handle.db.select().from(emissionSeriesClaims))[0]).toMatchObject({ owner: null, uncertain: false });
+    const next = await emitComprobante({ db: handle.db, gateway: base, now, env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" } }, input(empresa));
+    expect(next).toMatchObject({ estado: "aprobado", cbteNro: 1 });
+  });
+
+  it.each([true, false])("verifies only the requested reservation and never emits (exists=%s)", async (exists) => {
+    const empresa = await company();
+    const target = await insertDraft(empresa, "verify-target", { estado: "incierto", cbteNro: 1 });
+    await insertDraft(empresa, "verify-other", { estado: "incierto", cbteNro: 2 });
+    const base = new ArcaGatewayFake(undefined, now);
+    if (exists) await base.issueInvoice({ ...input(empresa), cuit: "20123456786", cbteNro: 1, receptorDocTipo: 99, receptorDocNro: 0, condicionIvaReceptorId: 5, receptorRazonSocial: "", fechaEmision: "2026-10-29", fechaVto: "2026-10-29", moneda: "PES", cotizacion: 1, importeNeto: 100, importeIva: 21, importeTotal: 121 } as never);
+    const consult = vi.spyOn(base, "consultInvoice");
+    const issue = vi.spyOn(base, "issueInvoice");
+    const result = await verifyComprobante({ db: handle.db, gateway: base, now, uncertainGraceMs: 0, env: { ARCA_ENV: "homologacion" } }, target.id, empresa);
+    expect(result.estado).toBe(exists ? "aprobado" : "rechazado");
+    expect(consult).toHaveBeenCalledTimes(1);
+    expect(consult.mock.calls[0]?.[0].cbteNro).toBe(1);
+    expect(issue).not.toHaveBeenCalled();
+    const other = (await handle.db.select().from(comprobantes)).find(row => row.idempotencyKey === "verify-other");
+    expect(other?.estado).toBe("incierto");
+    expect((await handle.db.select().from(emissionSeriesClaims))[0]?.uncertain).toBe(true);
+  });
+
+  it("does not release or consult a reservation during its uncertain grace period", async () => {
+    const empresa = await company();
+    const target = await insertDraft(empresa, "verify-grace", { estado: "incierto", cbteNro: 1 });
+    const key = seriesKey("homologacion", "20123456786", 1, 1);
+    await acquireSeriesClaim(handle.db, key, "owner", now().getTime());
+    await finishSeriesClaim(handle.db, key, "owner", false, now().getTime());
+    const base = new ArcaGatewayFake(undefined, now);
+    const consult = vi.spyOn(base, "consultInvoice");
+    await expect(verifyComprobante({ db: handle.db, gateway: base, now, env: { ARCA_ENV: "homologacion" } }, target.id, empresa)).rejects.toThrow("período de seguridad");
+    expect(consult).not.toHaveBeenCalled();
+    expect((await handle.db.select().from(comprobantes))[0]?.estado).toBe("incierto");
+  });
+
+  it("retains the shared series blocker when a legacy reservation still needs recovery", async () => {
+    const empresa = await company();
+    const target = await insertDraft(empresa, "verify-legacy", { estado: "incierto", cbteNro: 1 });
+    const [batch] = await handle.db.insert(batches).values({ clientId: empresa }).returning();
+    const [photo] = await handle.db.insert(photos).values({ batchId: batch!.id, storageKey: "test" }).returning();
+    const [ocr] = await handle.db.insert(ocrRows).values({ photoId: photo!.id, fields: { name: "Legacy", date: "2026-10-29", amount: 121 }, confidence: {} }).returning();
+    const [invoice] = await handle.db.insert(invoices).values({ clientId: empresa, ocrRowId: ocr!.id }).returning();
+    await handle.db.insert(issuedInvoices).values({ invoiceId: invoice!.id, cuit: "20123456786", ptoVta: 1, cbteTipo: 1, cbteNro: 2, importeTotalCentavos: 121, environment: "homologacion" });
+    const base = new ArcaGatewayFake(undefined, now);
+    const consult = vi.spyOn(base, "consultInvoice");
+    const result = await verifyComprobante({ db: handle.db, gateway: base, now, uncertainGraceMs: 0, env: { ARCA_ENV: "homologacion" } }, target.id, empresa);
+    expect(result.estado).toBe("rechazado");
+    expect(consult).toHaveBeenCalledTimes(1);
+    expect((await handle.db.select().from(emissionSeriesClaims))[0]?.uncertain).toBe(true);
+    expect((await handle.db.select().from(issuedInvoices))[0]?.cae).toBeNull();
+  });
 
   function input(empresaId: string, idempotencyKey = crypto.randomUUID(), cuit = "20123456786") {
     return {
@@ -174,7 +239,7 @@ describe("comprobante emission service", () => {
       getIvaCondition: base.getIvaCondition.bind(base),
       ultimoAutorizado: base.ultimoAutorizado.bind(base),
       consultInvoice: base.consultInvoice.bind(base),
-      issueInvoice: async () => { throw new ArcaBusinessError("Importe inválido", { code: "10049" }); },
+      issueInvoice: async (_req: unknown, _before: unknown, sent?: () => void) => { sent?.(); throw new ArcaBusinessError("Importe inválido", { code: "10049" }); },
     };
     const result = await emitComprobante({ db: handle.db, gateway, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa));
     expect(result).toMatchObject({ estado: "rechazado", resultado: "R", cbteNro: 1 });
@@ -188,7 +253,7 @@ describe("comprobante emission service", () => {
       getIvaCondition: base.getIvaCondition.bind(base),
       ultimoAutorizado: base.ultimoAutorizado.bind(base),
       consultInvoice: base.consultInvoice.bind(base),
-      issueInvoice: async () => { throw new ArcaBusinessError("Importe inválido", { code: "10049" }); },
+      issueInvoice: async (_req: unknown, _before: unknown, sent?: () => void) => { sent?.(); throw new ArcaBusinessError("Importe inválido", { code: "10049" }); },
     };
     const rejected = await emitComprobante({ db: handle.db, gateway: rejecting, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "rejected"));
     const next = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "next-after-rejection"));
@@ -203,10 +268,10 @@ describe("comprobante emission service", () => {
       getIvaCondition: base.getIvaCondition.bind(base),
       ultimoAutorizado: base.ultimoAutorizado.bind(base),
       consultInvoice: base.consultInvoice.bind(base),
-      issueInvoice: async () => { throw new Error("network timeout"); },
+      issueInvoice: async (_req: unknown, _before: unknown, sent?: () => void) => { sent?.(); throw new Error("network timeout"); },
     };
     const uncertain = await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, input(empresa, "timeout"));
-    expect(uncertain).toMatchObject({ estado: "incierto", cbteNro: 1, errores: EMISSION_UNCERTAIN_REASON });
+    expect(uncertain).toMatchObject({ estado: "incierto", cbteNro: 1, errores: expect.stringContaining(EMISSION_UNCERTAIN_REASON) });
     const next = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now, uncertainGraceMs: 0 }, input(empresa, "next"));
     expect(next.cbteNro).toBe(1);
     const [orphan] = await handle.db.select().from(comprobantes);
@@ -220,8 +285,8 @@ describe("comprobante emission service", () => {
       getIvaCondition: base.getIvaCondition.bind(base),
       ultimoAutorizado: base.ultimoAutorizado.bind(base),
       consultInvoice: base.consultInvoice.bind(base),
-      issueInvoice: async (request: Parameters<typeof base.issueInvoice>[0]) => {
-        await base.issueInvoice(request);
+      issueInvoice: async (...args: Parameters<typeof base.issueInvoice>) => {
+        await base.issueInvoice(...args);
         throw new Error("response lost after ARCA authorization");
       },
     };
@@ -295,7 +360,7 @@ describe("comprobante emission service", () => {
     expect(orphan).toMatchObject({ estado: "rechazado", resultado: "R" });
   });
 
-  it("keeps the reservation when a failure happens before ARCA is called", async () => {
+  it("releases the number and records a local failure before ARCA is called", async () => {
     const empresa = await company();
     const base = new ArcaGatewayFake(undefined, now);
     let issueCalls = 0;
@@ -315,10 +380,13 @@ describe("comprobante emission service", () => {
       now,
       beforeArca: async () => { throw new Error("local dispatch preparation failed"); },
     }, input(empresa, "pre-arca-failure"));
-    expect(result).toMatchObject({ estado: "incierto", cbteNro: 1 });
+    expect(result).toMatchObject({ estado: "rechazado", resultado: "L", cbteNro: 1 });
+    expect(result.errores).toContain("local dispatch preparation failed");
     expect(issueCalls).toBe(0);
     const [persisted] = await handle.db.select().from(comprobantes);
-    expect(persisted).toMatchObject({ estado: "incierto", cbteNro: 1 });
+    expect(persisted).toMatchObject({ estado: "rechazado", resultado: "L", cbteNro: 1 });
+    const [claim] = await handle.db.select().from(emissionSeriesClaims);
+    expect(claim).toMatchObject({ owner: null, uncertain: false });
   });
 
   it("revalidates the durable claim immediately before dispatch", async () => {
@@ -344,7 +412,8 @@ describe("comprobante emission service", () => {
         await handle.db.update(emissionSeriesClaims).set({ owner: null });
       },
     }, input(empresa, "claim-lost"));
-    expect(result.estado).toBe("incierto");
+    expect(result.estado).toBe("rechazado");
+    expect(result.resultado).toBe("L");
     expect(arcaCalls).toBe(0);
     expect(result.cbteNro).toBe(1);
   });
@@ -410,6 +479,6 @@ describe("comprobante emission service", () => {
       .rejects.toThrow(RECONCILIATION_UNCERTAIN_REASON);
     const rows = await handle.db.select().from(comprobantes);
     expect(rows.find((row) => row.idempotencyKey === "orphan-approved")).toMatchObject({ estado: "aprobado", cae: "70000000000001" });
-    expect(rows.find((row) => row.idempotencyKey === "orphan-fails")).toMatchObject({ estado: "incierto", errores: RECONCILIATION_UNCERTAIN_REASON });
+    expect(rows.find((row) => row.idempotencyKey === "orphan-fails")).toMatchObject({ estado: "incierto", errores: expect.stringContaining(RECONCILIATION_UNCERTAIN_REASON) });
   });
 });

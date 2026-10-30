@@ -31,8 +31,8 @@ describe("one fiscal pipeline for review and manual entry", () => {
   it("reconciles a job retry after a lost successful response without another issuance", async () => {
     const { invoice, company, deps } = await fixture(21);
     const issue = vi.spyOn(deps.gateway, "issueInvoice");
-    issue.mockImplementationOnce(async (request, beforeDispatch) => {
-      await ArcaGatewayFake.prototype.issueInvoice.call(deps.gateway, request, beforeDispatch);
+    issue.mockImplementationOnce(async (request, beforeDispatch, onDispatched) => {
+      await ArcaGatewayFake.prototype.issueInvoice.call(deps.gateway, request, beforeDispatch, onDispatched);
       throw new Error("response lost after authorization");
     });
     const first = await emitReviewedBatch(deps, [invoice.id]);

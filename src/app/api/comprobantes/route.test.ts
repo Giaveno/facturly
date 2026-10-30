@@ -20,6 +20,12 @@ describe("comprobantes route", () => {
   beforeEach(() => { vi.clearAllMocks(); vi.mocked(requireAccountantSession).mockResolvedValue(undefined); vi.mocked(getDb).mockReturnValue(dbFor([{ cuit: "33693450239", condicionIva: "ri" }]) as never); });
   it("rejects unauthenticated reads", async () => { vi.mocked(requireAccountantSession).mockRejectedValue(new Error("unauthorized")); expect((await GET(listingRequest("http://app.example.com/api/comprobantes"))).status).toBe(401); });
   it("rejects an unscoped listing", async () => { expect((await GET(listingRequest("http://app.example.com/api/comprobantes"))).status).toBe(403); });
+  it("retains the local-failure classification in the listing", async () => {
+    const row = { id: "local", estado: "rechazado", resultado: "L", errores: "Fallo local antes de enviar a ARCA" };
+    vi.mocked(getDb).mockReturnValue({ select: () => ({ from: () => ({ where: () => ({ orderBy: async () => [row] }) }) }) } as never);
+    const response = await GET(listingRequest(`http://app.example.com/api/comprobantes?empresaId=${companyId}`));
+    expect(await response.json()).toEqual([row]);
+  });
   it("requires an idempotency key", async () => { expect((await POST(request({ empresaId: "x" }))).status).toBe(400); });
   it("uses the header key, derives CUIT from the company, and ignores client CUIT", async () => {
     vi.mocked(emitComprobante).mockResolvedValue({ id: "x", empresaId: companyId, estado: "aprobado", cbteNro: 1, cae: "1", caeVto: "2026-01-01", resultado: "A", errores: null, emitted: true });

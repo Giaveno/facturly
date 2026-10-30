@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { createFetchTransport } from "./http";
 import { XMLValidator } from "fast-xml-parser";
 import {
   buildFecaesolicitarEnvelope,
@@ -38,6 +39,30 @@ const REQ: FecaesolicitarRequest = {
   monCotiz: 1,
   iva: [{ id: 5, baseImpCentavos: 100000, importeCentavos: 21000 }],
 };
+
+describe("issuance dispatch boundary", () => {
+  it("does not mark a request sent when SOAP construction fails", async () => {
+    const sent = vi.fn(); const fetchFn = vi.fn(); const before = vi.fn();
+    const client = new WsfeClient({ url: "https://example.test", transport: createFetchTransport({ fetchFn: fetchFn as never }) });
+    await expect(client.solicitar(AUTH, { ...REQ, monId: "INVALID" }, before, sent)).rejects.toThrow();
+    expect(before).not.toHaveBeenCalled(); expect(sent).not.toHaveBeenCalled(); expect(fetchFn).not.toHaveBeenCalled();
+  });
+  it("marks dispatch immediately before HTTP, after the claim and timeout setup", async () => {
+    const order: string[] = [];
+    const transport = createFetchTransport({ abortSignalTimeout: () => { order.push("timeout"); return new AbortController().signal; }, fetchFn: (async () => { order.push("http"); throw new Error("offline network"); }) as never });
+    const client = new WsfeClient({ url: "https://example.test", transport });
+    await expect(client.solicitar(AUTH, REQ, async () => { order.push("claim"); }, () => { order.push("sent"); })).rejects.toThrow();
+    expect(order).toEqual(["claim", "timeout", "sent", "http"]);
+  });
+  it("never marks dispatch for a failed claim or failed timeout preparation", async () => {
+    const sent = vi.fn(); const fetchFn = vi.fn();
+    const transport = createFetchTransport({ fetchFn: fetchFn as never, abortSignalTimeout: () => { throw new Error("local signal failure"); } });
+    const client = new WsfeClient({ url: "https://example.test", transport });
+    await expect(client.solicitar(AUTH, REQ, async () => { throw new Error("claim lost"); }, sent)).rejects.toThrow("claim lost");
+    await expect(client.solicitar(AUTH, REQ, undefined, sent)).rejects.toThrow();
+    expect(sent).not.toHaveBeenCalled(); expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
 
 describe("wsfe — buildFecaesolicitarEnvelope", () => {
   it("builds the exact FECAESolicitar SOAP envelope with the Auth block", () => {

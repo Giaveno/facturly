@@ -85,7 +85,7 @@ export class ArcaGatewayFake implements ArcaGateway {
     return this.issued.get(`${key(req.cuit,req.ptoVta,req.cbteTipo)}:${req.cbteNro}`) ?? null;
   }
 
-  async issueInvoice(req: FECAEReq, beforeDispatch?: () => Promise<void>): Promise<IssueInvoiceResult> {
+  async issueInvoice(req: FECAEReq, beforeDispatch?: () => Promise<void>, onDispatched?: () => void): Promise<IssueInvoiceResult> {
     await beforeDispatch?.();
     // The fake honors the CALLER-PINNED number (the port contract since slice 3).
     const cbteNro = req.cbteNro;
@@ -98,6 +98,7 @@ export class ArcaGatewayFake implements ArcaGateway {
     const last = this.lastAuthorized.get(key(req.cuit,req.ptoVta,req.cbteTipo)) ?? 0;
     if (!Number.isSafeInteger(cbteNro) || cbteNro !== last + 1) throw new ArcaBusinessError("Strict comprobante sequence requires ultimo+1", {code:"10016"});
 
+    onDispatched?.();
     const result: IssueInvoiceResult = {
       cae: String(CAE_BASE + cbteNro).padStart(14, "0"),
       caeFchVto: this.caeDueDate(),

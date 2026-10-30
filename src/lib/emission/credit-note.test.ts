@@ -33,7 +33,7 @@ describe("credit note emission", () => {
     const empresaId = await company(); const source = await original(empresaId); const base = new ArcaGatewayFake(undefined, now);
     const timedOut = {
       getIvaCondition: base.getIvaCondition.bind(base), ultimoAutorizado: base.ultimoAutorizado.bind(base), consultInvoice: base.consultInvoice.bind(base),
-      issueInvoice: async (request: Parameters<ArcaGatewayFake["issueInvoice"]>[0]) => { await base.issueInvoice(request); throw new Error("timeout after authorization"); },
+      issueInvoice: async (...args: Parameters<ArcaGatewayFake["issueInvoice"]>) => { await base.issueInvoice(...args); throw new Error("timeout after authorization"); },
     };
     const request = note(empresaId, source.id, "timeout-credit-note");
     const first = await emitComprobante({ db: handle.db, gateway: timedOut, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now }, request);

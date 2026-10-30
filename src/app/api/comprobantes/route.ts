@@ -29,7 +29,7 @@ export async function GET(req: Request): Promise<Response> {
   const empresaId = new URL(req.url).searchParams.get("empresaId") ?? req.headers.get("x-empresa-id");
   if (!empresaId || !isUuid(empresaId)) return errorJson(403, "Company scope required", correlationId);
   try {
-    const rows = await getDb().select({ id: comprobantes.id, empresaId: comprobantes.empresaId, estado: comprobantes.estado, cbteTipo: comprobantes.cbteTipo, cbteNro: comprobantes.cbteNro, cae: comprobantes.cae, caeVto: comprobantes.caeVto, errores: comprobantes.errores, ambiente: comprobantes.ambiente, createdAt: comprobantes.createdAt }).from(comprobantes).where(eq(comprobantes.empresaId, empresaId)).orderBy(comprobantes.createdAt);
+    const rows = await getDb().select({ id: comprobantes.id, empresaId: comprobantes.empresaId, estado: comprobantes.estado, resultado: comprobantes.resultado, cbteTipo: comprobantes.cbteTipo, cbteNro: comprobantes.cbteNro, cae: comprobantes.cae, caeVto: comprobantes.caeVto, errores: comprobantes.errores, ambiente: comprobantes.ambiente, createdAt: comprobantes.createdAt }).from(comprobantes).where(eq(comprobantes.empresaId, empresaId)).orderBy(comprobantes.createdAt);
     return NextResponse.json(rows);
   } catch (err) { console.error(`[comprobantes] ${correlationId} list failed`, err); return errorJson(500, "Failed to list comprobantes", correlationId); }
 }

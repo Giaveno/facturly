@@ -75,8 +75,8 @@ export interface ArcaGateway {
     clientCuit: string,
     payerCuit: string,
   ): Promise<CondicionIVA | "unresolved">;
-  /** Revalidate ownership after authentication, immediately before issuance dispatch. */
-  issueInvoice(r: FECAEReq, beforeDispatch?: () => Promise<void>): Promise<IssueInvoiceResult>;
+  /** Revalidate ownership after authentication/building. onDispatched MUST run immediately before the issuance HTTP call, never on login/build failure. */
+  issueInvoice(r: FECAEReq, beforeDispatch?: () => Promise<void>, onDispatched?: () => void): Promise<IssueInvoiceResult>;
   /** Read-only lookup that returns a result only after exact fiscal comparison. */
   consultInvoice?(r: FECAEReq): Promise<IssueInvoiceResult | null>;
   /**

@@ -113,14 +113,14 @@ export class ArcaGatewayProd implements ArcaGateway {
     });
   }
 
-  async issueInvoice(req: FECAEReq, beforeDispatch?: () => Promise<void>): Promise<IssueInvoiceResult> {
+  async issueInvoice(req: FECAEReq, beforeDispatch?: () => Promise<void>, onDispatched?: () => void): Promise<IssueInvoiceResult> {
     if (!this.emissionsEnabled) assertEmissionConfiguration({ EMISSIONS_ENABLED: "false", ARCA_ENV: this.environment });
     if (this.environment !== "homologacion") assertEmissionConfiguration({ EMISSIONS_ENABLED: "true", ARCA_ENV: this.environment });
     // The caller owns a durable environment/series claim and reservation.
     // A unique row alone does not serialize dispatch of an existing reservation.
     // An issuance is never retried, even after an authentication error.
     const ta = await this.taCache.get(ARCA_SERVICE_WSFE);
-    return this.emit(ta, req, beforeDispatch);
+    return this.emit(ta, req, beforeDispatch, onDispatched);
   }
 
   async consultInvoice(req: FECAEReq): Promise<IssueInvoiceResult | null> {
@@ -151,18 +151,17 @@ export class ArcaGatewayProd implements ArcaGateway {
           cbteNro: existing.cbteNro,
         };
       }
-    return null;
+    throw new ArcaBusinessError("El comprobante existe en ARCA, pero sus datos no coinciden con la reserva local.", { stage: "issuance", category: "malformed-response" });
   }
 
-  private async emit(ta: WsaaTa, req: FECAEReq, beforeDispatch?: () => Promise<void>): Promise<IssueInvoiceResult> {
+  private async emit(ta: WsaaTa, req: FECAEReq, beforeDispatch?: () => Promise<void>, onDispatched?: () => void): Promise<IssueInvoiceResult> {
     const auth = { token: ta.token, sign: ta.sign, cuit: req.cuit };
     // Caller-pinned comprobante number (design amendment #1): never derived here.
     const cbteNro = req.cbteNro;
 
     const payload = fecaReqToSolicitar(req);
     // TA acquisition may outlive the lease; do not rely on the caller's earlier check.
-    await beforeDispatch?.();
-    const result = await this.wsfe.solicitar(auth, payload);
+    const result = await this.wsfe.solicitar(auth, payload, beforeDispatch, onDispatched);
 
     // Idempotency: scan BOTH channels — ARCA reports 10015/10016 in errors OR
     // observaciones, never assume it is only in errors.

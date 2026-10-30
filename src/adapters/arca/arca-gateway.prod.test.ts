@@ -110,6 +110,17 @@ function makeGateway() {
 }
 
 describe("arca-gateway.prod — composed ARCA gateway", () => {
+  it("does not mark issuance sent when WSAA/cache acquisition fails", async () => {
+    let sends = 0; let dispatched = false;
+    const gateway = new ArcaGatewayProd({
+      taCache: { async get() { throw new Error("WSAA: certificado inválido"); }, async evict() { throw new Error("must not evict"); } },
+      wsfe: new WsfeClient({ url: "offline", transport: { async post() { sends++; throw new Error("must not send"); } } }),
+      padron: new PadronA5Client({ url: "offline", transport: padronTransport().transport }),
+      emissionsEnabled: true,
+    });
+    await expect(gateway.issueInvoice(REQ, undefined, () => { dispatched = true; })).rejects.toThrow("WSAA: certificado inválido");
+    expect(dispatched).toBe(false); expect(sends).toBe(0);
+  });
   it("revalidates dispatch ownership after delayed TA acquisition and sends nothing if expired", async () => {
     const events: string[] = [];
     let leaseValid = true;

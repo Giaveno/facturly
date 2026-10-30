@@ -19,7 +19,7 @@ import { noopLogger, noopMetrics, type ArcaLogger, type ArcaMetrics } from "./lo
 
 /** Minimal HTTP POST contract shared by all three adapters. */
 export interface HttpTransport {
-  post(url: string, body: string, headers: Record<string, string>): Promise<string>;
+  post(url: string, body: string, headers: Record<string, string>, onDispatched?: () => void): Promise<string>;
 }
 
 /** Per-call timeout budget for an outbound ARCA call. */
@@ -72,16 +72,18 @@ export function createFetchTransport(options: FetchTransportOptions = {}): HttpT
   const abortSignalTimeout = options.abortSignalTimeout ?? AbortSignal.timeout.bind(AbortSignal);
 
   return {
-    async post(url, body, headers) {
+    async post(url, body, headers, onDispatched) {
       // Capture before faults/status discard the body; never enable raw logging.
       options.capture?.("request", url, body);
+      const signal = abortSignalTimeout(timeoutMs);
       let res: Response;
       try {
+        onDispatched?.();
         res = await fetchFn(url, {
           method: "POST",
           body,
           headers,
-          signal: abortSignalTimeout(timeoutMs),
+          signal,
         });
       } catch (err) {
         // AbortSignal.timeout throws a DOMException named "TimeoutError" (or

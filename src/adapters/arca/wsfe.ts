@@ -36,7 +36,7 @@ export interface WsfeAuth {
 
 /** Injectable HTTP transport (offline tests substitute a fake). */
 export interface WsfeTransport {
-  post(url: string, body: string, headers: Record<string, string>): Promise<string>;
+  post(url: string, body: string, headers: Record<string, string>, onDispatched?: () => void): Promise<string>;
 }
 
 /** One taxable IVA alícuota in an A or B invoice detail. */
@@ -458,10 +458,13 @@ export class WsfeClient {
   async solicitar(
     auth: WsfeAuth,
     req: FecaesolicitarRequest,
+    beforeDispatch?: () => Promise<void>,
+    onDispatched?: () => void,
   ): Promise<FecaesolicitarResult> {
     const body = buildFecaesolicitarEnvelope(auth, req);
+    await beforeDispatch?.();
     try {
-      const response = await this.transport.post(this.url, body, { ...SOAP_HEADERS, SOAPAction: `"${NAMESPACE}FECAESolicitar"` });
+      const response = await this.transport.post(this.url, body, { ...SOAP_HEADERS, SOAPAction: `"${NAMESPACE}FECAESolicitar"` }, onDispatched);
       const result = parseFecaesolicitarResponse(response);
       if (result.providerErrorsOnly) return result;
       if (result.cbteNro !== req.cbteNro || result.cuit !== auth.cuit || result.ptoVta !== req.ptoVta || result.cbteTipo !== req.cbteTipo || result.fechaEmision !== formatDateYyyyMmDd(req.cbteFch)) throw new ArcaBusinessError("ARCA issuance outcome uncertain (malformed-response)", { stage: "issuance", category: "malformed-response" });
