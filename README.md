@@ -65,6 +65,8 @@ protected by `src/middleware.ts`; unauthenticated page requests redirect to
 - On mobile, open the navigation menu from the top bar; Escape or the close button dismisses it. The top bar displays the configured fiscal environment, not a simulated status.
 - Visual changes do not combine review confirmation with fiscal approval. No invoice is emitted by selecting files, opening cards or navigating.
 
+For isolated UI verification, run `node scripts/verify-visual.mjs` after installing Playwright's Chromium browser. The script serves the production page components on `127.0.0.1:4179` with synthetic data, replaces authentication/database dependencies in the preview bundle only, intercepts API requests and blocks external network traffic. It checks desktop/tablet/mobile layouts and upload/review interactions, then closes its server. Screenshots go to `.data/visual-review/`. This is not a live authentication, database or fiscal integration test.
+
 ## Inngest (background jobs)
 
 The emission, OCR, and lost-CAE recovery jobs are served at `/api/inngest`.
