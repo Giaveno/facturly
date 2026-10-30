@@ -136,7 +136,8 @@ try {
   await page.goto("http://127.0.0.1:4179/");
   const submit = page.getByRole("button", { name: "Cargar comprobantes", exact: true });
   assert.equal(await submit.isDisabled(), true);
-  await page.getByLabel("Empresa emisora", { exact: true }).selectOption(companies[0].id);
+  const issuer = page.locator('select[name="clientId"]');
+  await issuer.selectOption(companies[0].id);
   const input = page.getByLabel("Fotos de comprobantes", { exact: true });
   await input.setInputFiles([
     { name: "synthetic-one.png", mimeType: "image/png", buffer: Buffer.from("synthetic image one") },
@@ -162,7 +163,7 @@ try {
   await page.getByRole("status").filter({ hasText: "Se registraron 1 comprobante(s)" }).waitFor();
   assert.equal(await page.locator(".file-row").count(), 0);
   assert.equal(await submit.isDisabled(), true);
-  assert.equal(await page.getByLabel("Empresa emisora", { exact: true }).inputValue(), companies[0].id);
+  assert.equal(await issuer.inputValue(), companies[0].id);
   console.log("PASS file selection, removal, drag/drop, multipart contract, rejected upload retention and success reset");
 
   await page.goto("http://127.0.0.1:4179/review");
