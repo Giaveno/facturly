@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 import UploadForm from "../upload-form";
 import { getDb } from "@/lib/db/client";
 import { listClients } from "@/lib/clients/clients";
@@ -14,7 +15,7 @@ export default async function Home() {
           <p className="lede">Subí los comprobantes para registrar sus datos y revisarlos antes de continuar.</p></div>
       </div>
       <UploadForm clients={clients.map(({ id, razonSocial, cuit }) => ({ id, razonSocial, cuit }))} />
-      <p><Link href="/review">Ver comprobantes para revisar →</Link></p>
+      <p className="page-footer-link"><Link href="/review">Ver comprobantes para revisar <ArrowUpRight size={14} aria-hidden="true" /></Link></p>
     </main>
   );
 }

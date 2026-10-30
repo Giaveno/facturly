@@ -72,7 +72,7 @@ export default function ClientActions(props: ClientActionsProps) {
   }
 
   return (
-    <div>
+    <div className="client-actions">
       <button type="button" onClick={toggleDelegation}>
         {props.delegationEnabled ? "Desactivar delegación" : "Registrar delegación"}
       </button>{" "}
@@ -80,17 +80,17 @@ export default function ClientActions(props: ClientActionsProps) {
         {editing ? "Cancelar" : "Editar"}
       </button>
       {editing ? (
-        <form onSubmit={onEdit} onChange={() => setVerificationVersion(v => v + 1)}>
-          <input name="razonSocial" defaultValue={props.razonSocial} required />
-          <input name="cuit" defaultValue={props.cuit} required />
-          <input name="ptoVta" type="number" min={1} max={99998} defaultValue={props.ptoVta} required />
-          <select name="condicionIva" defaultValue={props.condicionIva}>
+        <form className="form-stack" onSubmit={onEdit} onChange={() => setVerificationVersion(v => v + 1)}>
+          <label>Razón social<input name="razonSocial" defaultValue={props.razonSocial} required /></label>
+          <label>CUIT<input name="cuit" defaultValue={props.cuit} required /></label>
+          <label>Punto de venta<input name="ptoVta" type="number" min={1} max={99998} defaultValue={props.ptoVta} required /></label>
+          <label>Condición frente al IVA<select name="condicionIva" defaultValue={props.condicionIva}>
             {CONDICIONES.map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>
             ))}
-          </select>
+          </select></label>
           <button type="submit">Guardar cambios</button>
         </form>
       ) : null}

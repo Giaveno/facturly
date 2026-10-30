@@ -1,3 +1,5 @@
+import React from "react";
+import { Building2, Plus } from "lucide-react";
 import { getDb } from "@/lib/db/client";
 import { listClients } from "@/lib/clients/clients";
 import { getCredentialInfo } from "@/lib/credentials/service";
@@ -6,65 +8,24 @@ import ClientActions from "./client-actions";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Clients page — lists the accountant's client companies (razón social, CUIT,
- * punto de venta, condición IVA) and whether their `wsfe` delegation is enabled,
- * with controls to create/edit a client and toggle its delegation. Plain — no
- * design work.
- */
+const conditions: Record<string, string> = { ri: "Responsable inscripto", monotributista: "Monotributista", exento: "Exento" };
+
 export default async function ClientsPage() {
   const db = getDb();
   const clients = await listClients(db);
   const homologationEnabled = process.env.ARCA_ENV === "homologacion";
   const certificate = homologationEnabled ? await getCredentialInfo(db).catch(() => null) : null;
 
-  return (
-    <main className="page-content">
-      <div className="page-heading"><div><p className="eyebrow">Empresas emisoras</p><h1>Clientes</h1><p className="lede">Administrá los datos fiscales y las delegaciones de las empresas con las que trabajás.</p></div></div>
-      <ClientsForm />
-
-      <section className="page-section"><h2>Empresas registradas <span className="count-badge">{clients.length}</span></h2>
-      {clients.length === 0 ? (
-        <div className="empty-state"><strong>Todavía no hay clientes registrados.</strong><p>Creá una empresa emisora para poder cargar comprobantes.</p></div>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Razón social</th>
-              <th>CUIT</th>
-              <th>Pto. Vta.</th>
-              <th>Condición IVA</th>
-              <th>Delegación wsfe</th>
-              <th>Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {clients.map((c) => (
-              <tr key={c.id}>
-                <td>{c.razonSocial}</td>
-                <td>{c.cuit}</td>
-                <td>{c.ptoVta}</td>
-                <td>{c.condicionIva}</td>
-                <td><span className={`status-pill ${c.delegationEnabled ? "status-ready" : "status-muted"}`}>{c.delegationEnabled ? "Activa" : "No configurada"}</span></td>
-                <td>
-                  <ClientActions
-                    clientId={c.id}
-                    razonSocial={c.razonSocial}
-                    cuit={c.cuit}
-                    ptoVta={c.ptoVta}
-                    condicionIva={c.condicionIva}
-                    delegationEnabled={c.delegationEnabled}
-                    fingerprint={certificate?.fingerprint ?? null}
-                    homologationEnabled={homologationEnabled}
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      <p className="helper-note">La delegación local registra tu configuración, pero no otorga permisos en ARCA. La autorización debe gestionarse por separado en ARCA.</p>
-      </section>
-    </main>
-  );
+  return <main className="page-content">
+    <div className="page-heading"><div><p className="eyebrow">Organización</p><h1>Clientes</h1><p className="lede">Administrá los datos fiscales y las delegaciones de las empresas con las que trabajás.</p></div><span className="count-badge">{clients.length} empresas</span></div>
+    <details className="surface new-client-panel" open={clients.length === 0}><summary><Plus size={17} aria-hidden="true" /><span>Registrar nueva empresa</span></summary><div className="new-client-content"><p className="helper-note">Completá los datos de la empresa emisora y su punto de venta.</p><ClientsForm /></div></details>
+    <section className="page-section" aria-labelledby="registered-clients"><h2 id="registered-clients">Empresas registradas</h2>
+      {clients.length === 0 ? <div className="empty-state"><strong>Todavía no hay clientes registrados.</strong><p>Creá una empresa emisora para poder cargar comprobantes.</p></div> : <div className="client-grid">{clients.map(client => <article className="surface client-card" key={client.id}>
+        <div className="client-card-top"><span className="client-card-icon"><Building2 size={20} aria-hidden="true" /></span><span className={`status-pill ${client.delegationEnabled ? "status-ready" : "status-muted"}`}>{client.delegationEnabled ? "Delegación registrada" : "Sin delegación"}</span></div>
+        <h3>{client.razonSocial}</h3><p className="client-cuit">CUIT {client.cuit}</p><dl className="client-fiscal-data"><div><dt>Punto de venta</dt><dd>{String(client.ptoVta).padStart(4, "0")}</dd></div><div><dt>Condición IVA</dt><dd>{conditions[client.condicionIva] ?? client.condicionIva}</dd></div></dl>
+        <details className="client-management"><summary>Administrar empresa</summary><ClientActions clientId={client.id} razonSocial={client.razonSocial} cuit={client.cuit} ptoVta={client.ptoVta} condicionIva={client.condicionIva} delegationEnabled={client.delegationEnabled} fingerprint={certificate?.fingerprint ?? null} homologationEnabled={homologationEnabled} /></details>
+      </article>)}</div>}
+      <p className="helper-note client-delegation-note">La delegación local registra tu configuración, pero no otorga permisos en ARCA. La autorización debe gestionarse por separado en ARCA.</p>
+    </section>
+  </main>;
 }
