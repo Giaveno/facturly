@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { ArcaBusinessError } from "./errors";
 import {
   DEFAULT_TA_POLICY,
   parseWsaaExpiration,
@@ -272,6 +273,78 @@ describe("ta-cache — TaCache", () => {
     const ta = await cache.get("wsfe");
     expect(ta.token).toBe("cached-token");
     expect(calls).toHaveLength(0);
+  });
+
+  it("logs the normalized SOAP faultcode from an ArcaError", async () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const failure = new ArcaBusinessError("ARCA SOAP Fault", {
+      category: "soap-fault",
+      faultcode: "ns1:coe.alreadyAuthenticated",
+      faultstring: "SECRET provider text",
+    });
+    const cache = new TaCache({
+      store: { get: async () => null, put: async () => undefined },
+      wsaa: { loginCms: async () => { throw failure; } },
+      logger,
+      clock: () => new Date(EXPIRY_MS - 3600 * 1000),
+    });
+
+    await expect(cache.get("wsfe")).rejects.toBe(failure);
+    expect(logger.warn).toHaveBeenCalledWith("wsaa_login_failed", expect.objectContaining({
+      faultcode: "coe.alreadyAuthenticated",
+    }));
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("SECRET");
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("faultstring");
+  });
+
+  it("re-reads the store once after coe.alreadyAuthenticated and uses a concurrent valid TA", async () => {
+    const concurrentEntry: TaCacheEntry = {
+      token: "concurrent-token",
+      sign: "concurrent-sign",
+      expiresAt: EXPIRY_MS,
+      issuedAt: EXPIRY_MS - 60 * 1000,
+    };
+    const get = vi.fn<() => Promise<TaCacheEntry | null>>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(concurrentEntry);
+    const failure = new ArcaBusinessError("ARCA SOAP Fault", {
+      category: "soap-fault",
+      faultcode: "coe.alreadyAuthenticated",
+    });
+    const cache = new TaCache({
+      store: { get, put: async () => undefined },
+      wsaa: { loginCms: async () => { throw failure; } },
+      clock: () => new Date(EXPIRY_MS - 3600 * 1000),
+    });
+
+    await expect(cache.get("wsfe")).resolves.toMatchObject({ token: "concurrent-token" });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenNthCalledWith(1, "wsfe");
+    expect(get).toHaveBeenNthCalledWith(2, "wsfe");
+  });
+
+  it("rethrows coe.alreadyAuthenticated when the single re-read has no valid TA", async () => {
+    const expiredEntry: TaCacheEntry = {
+      token: "expired-token",
+      sign: "expired-sign",
+      expiresAt: EXPIRY_MS - 1,
+      issuedAt: EXPIRY_MS - 3600 * 1000,
+    };
+    const get = vi.fn<() => Promise<TaCacheEntry | null>>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(expiredEntry);
+    const failure = new ArcaBusinessError("ARCA SOAP Fault", {
+      category: "soap-fault",
+      faultcode: "coe.alreadyAuthenticated",
+    });
+    const cache = new TaCache({
+      store: { get, put: async () => undefined },
+      wsaa: { loginCms: async () => { throw failure; } },
+      clock: () => new Date(EXPIRY_MS),
+    });
+
+    await expect(cache.get("wsfe")).rejects.toBe(failure);
+    expect(get).toHaveBeenCalledTimes(2);
   });
 
   it("throws when renewal fails and no valid TA exists to fall back on", async () => {

@@ -24,7 +24,7 @@ import { tracePhase, withPhase } from "@/lib/emission/trace";
  */
 
 import { createHash } from "node:crypto";
-import { safeQueryDiagnostic } from "./query-diagnostics";
+import { ArcaError } from "./errors";
 import type { WsaaTa } from "./wsaa";
 import { createConsoleLogger, noopMetrics, type ArcaLogger, type ArcaMetrics } from "./logger";
 
@@ -188,11 +188,22 @@ export class TaCache {
       // A genuine loginCms failure: fall back to a still-valid cached TA (this
       // is the WSAA-cooldown path), otherwise rethrow.
       this.metrics.increment("wsaa_failure");
-      const diagnostic = safeQueryDiagnostic(err && typeof err === "object" && "diagnostic" in err ? err.diagnostic : undefined);
+      const faultcode = err instanceof ArcaError ? err.faultcode : undefined;
       this.logger.warn("wsaa_login_failed", {
         service, cache_key_hash: createHash("sha256").update(key).digest("hex").slice(0, 12), cache: entry ? "hit" : "miss",
-        faultcode: diagnostic?.faultcode, faultstring: diagnostic?.faultstring,
+        faultcode,
       });
+      if (!entry && faultcode === "coe.alreadyAuthenticated") {
+        let concurrentEntry: TaCacheEntry | null = null;
+        try {
+          concurrentEntry = await this.store.get(key);
+        } catch {
+          concurrentEntry = null;
+        }
+        if (concurrentEntry && nowMs < concurrentEntry.expiresAt) {
+          return this.toTa(concurrentEntry);
+        }
+      }
       if (entry && nowMs < entry.expiresAt) {
         this.metrics.increment("wsaa_cooldown");
         this.logger.warn("ta_cooldown_hit", { service });
