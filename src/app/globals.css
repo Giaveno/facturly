@@ -70,6 +70,7 @@ code { font-size: 11px; overflow-wrap: anywhere; }
 .mobile-navigation-content { display: flex; flex-direction: column; min-height: 100%; padding: 20px 16px; }
 .mobile-navigation-heading { display: flex; justify-content: space-between; align-items: center; margin: 0 4px 28px; }
 .mobile-navigation-heading strong { font-size: 23px; letter-spacing: -.8px; }
+.mobile-navigation-footer { border-top: 1px solid var(--border); padding-top: 12px; }
 
 .page-content, .app-main main:not(.page-content) { max-width: 1320px; margin: 0 auto; padding: 42px 44px 56px; }
 .page-heading { display: flex; justify-content: space-between; gap: 20px; align-items: flex-end; margin-bottom: 28px; }
@@ -123,7 +124,7 @@ p[role=alert], .error { color: var(--danger); }
 .app-main td { font-size: 12px; }
 .app-main tbody tr:last-child td { border-bottom: 0; }
 .app-main td small { display: block; margin-top: 4px; color: #697481; font-size: 10px; white-space: normal; }
-.app-main td form { display: inline-flex; align-items: end; gap: 7px; padding: 0; border: 0; background: none; }
+.app-main td form { display: inline-flex; align-items: flex-end; gap: 7px; padding: 0; border: 0; background: none; }
 .app-main td button, .client-card button, .credential-summary button[type=button] { min-height: 34px; padding: 7px 10px; border-radius: 5px; border: 1px solid var(--border); background: white; color: var(--foreground); font-size: 11px; }
 .app-main td button[type=submit] { border-color: var(--blue); background: var(--blue); color: white; }
 .app-main td form label { display: grid; gap: 4px; color: var(--muted); font-size: 10px; }

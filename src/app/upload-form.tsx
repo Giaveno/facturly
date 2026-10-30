@@ -4,7 +4,7 @@ import React, { useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Building2, Check, FileImage, Info, Plus, ShieldCheck, Upload, X } from "lucide-react";
 
- type UploadClient = { id: string; razonSocial: string; cuit: string };
+type UploadClient = { id: string; razonSocial: string; cuit: string };
 
 export default function UploadForm({ clients }: { clients: UploadClient[] }) {
   const [clientId, setClientId] = useState(clients.length === 1 ? clients[0]?.id ?? "" : "");

@@ -3,9 +3,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/review" }));
-import AppNavigation, { CurrentPageContext } from "./app-navigation";
+import AppNavigation, { CurrentPageContext, MobileNavigation } from "./app-navigation";
 
 describe("workspace navigation", () => {
+  it("keeps logout reachable inside the mobile dialog", () => {
+    const html = renderToStaticMarkup(createElement(MobileNavigation));
+    expect(html).toContain('aria-controls="mobile-navigation"');
+    expect(html).toContain('aria-labelledby="mobile-navigation-title"');
+    expect(html).toContain("Cerrar sesión");
+    expect(html).toContain("Cerrar menú");
+  });
   it("preserves every real destination and the current page", () => {
     const html = renderToStaticMarkup(createElement(AppNavigation));
     for (const href of ["/", "/review", "/invoices", "/emission", "/clients", "/cuit-lookup", "/credentials"]) {

@@ -4,6 +4,7 @@ import React, { useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Building2, ChevronRight, FileCheck2, FilePlus2, FileText, Menu, Search, Settings2, Upload, X } from "lucide-react";
+import LogoutButton from "./logout-button";
 
 const links = [
   { href: "/", label: "Cargar comprobantes", icon: Upload },
@@ -41,6 +42,7 @@ export function MobileNavigation() {
       <div className="mobile-navigation-content">
         <div className="mobile-navigation-heading"><strong id="mobile-navigation-title">facturly</strong><button className="icon-button" type="button" aria-label="Cerrar menú" onClick={close}><X size={20} aria-hidden="true" /></button></div>
         <AppNavigation onNavigate={close} />
+        <div className="mobile-navigation-footer"><LogoutButton /></div>
       </div>
     </dialog>
   </>;
