@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
-import { chromium } from "@playwright/test";
+import { chromium, expect } from "@playwright/test";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const output = path.join(root, ".data", "visual-review");
@@ -102,7 +102,17 @@ try {
       await page.goto(`http://127.0.0.1:4179${route}`);
       await page.locator("h1").waitFor();
       if (route === "/invoices") await page.getByText("Anular / Nota de crédito").waitFor();
-      if (route === "/review") await page.getByText("Imagen original · 100 % · 0°").waitFor();
+      if (route === "/review") {
+        if (width <= 1120) await page.getByRole("button", { name: "Imagen", exact: true }).click();
+        await expect(page.getByRole("button", { name: "Ampliar imagen", exact: true })).toBeEnabled();
+        await page.getByText("Imagen original · 100 % · 0°").waitFor();
+        if (width <= 1120) {
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1), false, `Horizontal image-view overflow at ${width}px`);
+          await page.screenshot({ path: path.join(output, `review-image-${width}.png`), fullPage: true });
+          await page.getByRole("button", { name: "Datos", exact: true }).click();
+          assert.equal(await page.getByRole("region", { name: "Datos extraídos", exact: true }).isVisible(), true);
+        }
+      }
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
       assert.equal(overflow, false, `Horizontal page overflow at ${route} ${width}px`);
       await page.screenshot({ path: path.join(output, `${route.replaceAll("/", "") || "upload"}-${width}.png`), fullPage: true });
