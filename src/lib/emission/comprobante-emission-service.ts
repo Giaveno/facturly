@@ -232,7 +232,7 @@ async function reconcileOrphans(db: Db, deps: ComprobanteEmissionDeps, key: stri
     }
     try {
       const result = await deps.gateway.consultInvoice(comprobanteToFecaReq(row, await associationForRow(db, row)));
-      if (!result) await updateOrphan(db, key, row.id, { estado: "rechazado", resultado: "R", errores: phaseFailure(RECONCILIATION_NOT_FOUND_REASON, "reconciliation") });
+      if (!result) await updateOrphan(db, key, row.id, { estado: "rechazado", resultado: "N", errores: phaseFailure(RECONCILIATION_NOT_FOUND_REASON, "reconciliation") });
       else if (!isMatchingResult(row, result)) {
         await updateOrphan(db, key, row.id, { estado: "incierto", errores: phaseFailure(RECONCILIATION_MISMATCH_REASON, "reconciliation") });
         throw new ComprobanteEmissionError(RECONCILIATION_MISMATCH_REASON);

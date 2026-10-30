@@ -278,6 +278,7 @@ describe("comprobante emission service", () => {
     expect(next.cbteNro).toBe(1);
     const [orphan] = await handle.db.select().from(comprobantes);
     expect(emissionDiagnostic(orphan!.errores)).toEqual({ phase: "reconciliation", cause: RECONCILIATION_NOT_FOUND_REASON });
+    expect(orphan!.resultado).toBe("N");
   });
 
   it("reconciles a timeout when ARCA did authorize the reserved number", async () => {
@@ -359,7 +360,7 @@ describe("comprobante emission service", () => {
     await expect(emission).resolves.toMatchObject({ estado: "aprobado", cbteNro: 1 });
     expect(consultCalls).toBe(1);
     const [orphan] = await handle.db.select().from(comprobantes).where(eq(comprobantes.idempotencyKey, "reconcile-race"));
-    expect(orphan).toMatchObject({ estado: "rechazado", resultado: "R" });
+    expect(orphan).toMatchObject({ estado: "rechazado", resultado: "N" });
   });
 
   it("releases the number and records a local failure before ARCA is called", async () => {
