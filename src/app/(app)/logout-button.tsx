@@ -1,12 +1,8 @@
 "use client";
 
 import { signOut } from "next-auth/react";
+import { LogOut } from "lucide-react";
 
-/** Signs out and returns to the login page. */
 export default function LogoutButton() {
-  return (
-    <button type="button" onClick={() => signOut({ callbackUrl: "/login" })}>
-      Cerrar sesión
-    </button>
-  );
+  return <button className="logout-button" type="button" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={15} aria-hidden="true" />Cerrar sesión</button>;
 }
