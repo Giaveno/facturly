@@ -28,17 +28,12 @@ import {
   rejectInvoice,
 } from "@/lib/review/workflow";
 import { listReviewRows } from "@/lib/review/read-model";
-import {
-  emitBatch,
-  emitInvoice,
-  NumberAllocator,
-} from "@/lib/emission/emission-service";
+import { emitReviewedBatch, emitReviewedInvoice, reviewIdempotencyKey } from "@/lib/emission/review-emission-service";
+import { loadApprovedComprobantePdfInput } from "@/lib/invoices/read-model";
 import { listExportRows, exportRowsToXlsx } from "@/adapters/export";
 import {
-  buildInvoicePdfModel,
-  buildInvoiceQrUrl,
+  buildComprobantePdfModel,
   renderInvoicePdf,
-  type InvoicePdfInput,
 } from "@/pdf/render";
 import { decodeQrPayload, QR_BASE_URL, type QrData } from "@/domain/qr";
 import {
@@ -52,10 +47,9 @@ import {
   clients,
   delegations,
   invoices,
-  issuedInvoices,
+  comprobantes,
   ocrRows,
 } from "@/lib/db/schema";
-import { RowNotEmittableError } from "@/domain/emission";
 import type { ArcaGateway } from "@/ports/arca-gateway";
 import type { OcrProvider } from "@/ports/ocr-provider";
 
@@ -264,7 +258,7 @@ export async function runDemo(options: DemoOptions): Promise<DemoResult> {
     const acme2 = invoicesByRow.get("acme-2.jpg")!;
     for (const invId of [acme1, acme2]) {
       await markInvoiceReviewed(db, invId);
-      const approved = await approveInvoice(db, gateway, invId, now);
+      const approved = await approveInvoice(db, gateway, invId, now, undefined, "homologacion");
       const legend = approved.cbteTipo === 1 && approved.condicionIvaReceptorId === 6;
       log(
         `  Approved: ${approved.receptorRazonSocial} → ${cbteLabel(approved.cbteTipo as CbteTipo)}` +
@@ -278,7 +272,7 @@ export async function runDemo(options: DemoOptions): Promise<DemoResult> {
     let flaggedReason = "";
     try {
       await markInvoiceReviewed(db, deltaId);
-      await approveInvoice(db, gateway, deltaId, now);
+      await approveInvoice(db, gateway, deltaId, now, undefined, "homologacion");
     } catch (err) {
       flaggedReason = err instanceof Error ? err.message : String(err);
       log(`  Refused: ${flaggedReason}`);
@@ -297,46 +291,39 @@ export async function runDemo(options: DemoOptions): Promise<DemoResult> {
     // ── Guard: a BLOCKED row cannot emit ───────────────────────────────────
     step("9", "Guard — a BLOCKED row cannot be emitted");
     const blockedId = invoicesByRow.get("lowconf.jpg")!;
-    const allocator = new NumberAllocator(gateway);
+    const emissionDeps = { db, gateway, now, environment: "homologacion" as const, env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" } };
     let blockedRefused = false;
     let blockedRefusalReason = "";
     try {
-      await emitInvoice(
-        { db, gateway, emissionsEnabled: true, delayMs: 0 },
-        allocator,
-        blockedId,
-      );
+      await emitReviewedInvoice(emissionDeps, blockedId);
     } catch (err) {
-      blockedRefused = err instanceof RowNotEmittableError;
+      blockedRefused = err instanceof Error && err.message.includes("aprobadas");
       blockedRefusalReason = err instanceof Error ? err.message : String(err);
       log(`  Refused: ${blockedRefusalReason}`);
     }
 
     // ── Emit the batch ─────────────────────────────────────────────────────
     step("10", "Emit the approved invoices (batch) and print the CAEs");
-    const results = await emitBatch(
-      { db, gateway, emissionsEnabled: true, delayMs: 0 },
-      [acme1, acme2],
-    );
+    const results = await emitReviewedBatch(emissionDeps, [acme1, acme2]);
     const emitted: EmittedInvoice[] = [];
     for (const r of results) {
       const [inv] = await db.select().from(invoices).where(eq(invoices.id, r.invoiceId));
       const [issued] = await db
         .select()
-        .from(issuedInvoices)
-        .where(eq(issuedInvoices.invoiceId, r.invoiceId));
+        .from(comprobantes)
+        .where(eq(comprobantes.idempotencyKey, reviewIdempotencyKey(r.invoiceId)));
       const legend = inv!.cbteTipo === 1 && inv!.condicionIvaReceptorId === 6;
       emitted.push({
         invoiceId: r.invoiceId,
-        cbteNro: r.cbteNro!,
-        cae: r.cae!,
+        cbteNro: issued!.cbteNro!,
+        cae: issued!.cae!,
         cbteTipo: inv!.cbteTipo as CbteTipo,
         receptorRazonSocial: inv!.receptorRazonSocial!,
         includesLegend: legend,
       });
       log(
-        `  ${inv!.receptorRazonSocial}: ${cbteLabel(inv!.cbteTipo as CbteTipo)} #${r.cbteNro}` +
-          `  CAE ${r.cae}  (valid until ${issued!.caeFchVto})${legend ? "  [Ley 27.618 legend]" : ""}`,
+        `  ${inv!.receptorRazonSocial}: ${cbteLabel(inv!.cbteTipo as CbteTipo)} #${issued!.cbteNro}` +
+          `  CAE ${issued!.cae}  (valid until ${issued!.caeVto})${legend ? "  [Ley 27.618 legend]" : ""}`,
       );
     }
 
@@ -345,34 +332,16 @@ export async function runDemo(options: DemoOptions): Promise<DemoResult> {
     const files: string[] = [];
     let qr: QrData | undefined;
     for (const e of emitted) {
-      const [inv] = await db.select().from(invoices).where(eq(invoices.id, e.invoiceId));
-      const [issued] = await db
-        .select()
-        .from(issuedInvoices)
-        .where(eq(issuedInvoices.invoiceId, e.invoiceId));
-      const [owner] = await db.select().from(clients).where(eq(clients.id, inv!.clientId));
-      const input: InvoicePdfInput = {
-        cuit: owner!.cuit,
-        ptoVta: owner!.ptoVta,
-        cbteTipo: inv!.cbteTipo as CbteTipo,
-        cbteNro: issued!.cbteNro,
-        cae: issued!.cae!,
-        caeFchVto: issued!.caeFchVto!,
-        fechaEmision: inv!.fechaEmision!,
-        importeTotal: inv!.importeTotalCentavos!,
-        moneda: inv!.moneda!,
-        receptorDocTipo: inv!.receptorDocTipo!,
-        receptorDocNro: inv!.receptorDocNro!,
-        condicionIvaReceptorId: inv!.condicionIvaReceptorId!,
-        receptorRazonSocial: inv!.receptorRazonSocial!,
-      };
-      const model = buildInvoicePdfModel(input);
+      const [issued] = await db.select().from(comprobantes).where(eq(comprobantes.idempotencyKey, reviewIdempotencyKey(e.invoiceId)));
+      const input = await loadApprovedComprobantePdfInput(db, issued!.id, issued!.empresaId);
+      if (!input) throw new Error("Canonical approved PDF input missing");
+      const model = buildComprobantePdfModel(input);
       const pdf = await renderInvoicePdf(model);
       const pdfPath = join(options.outputDir, `invoice-${issued!.cbteNro}.pdf`);
       writeFileSync(pdfPath, pdf);
       files.push(pdfPath);
       log(`  PDF:   ${pdfPath}`);
-      if (!qr) qr = decodeQrPayload(buildInvoiceQrUrl(input).slice(QR_BASE_URL.length));
+      if (!qr) qr = decodeQrPayload(model.qrUrl.slice(QR_BASE_URL.length));
     }
     const xlsx = exportRowsToXlsx(await listExportRows(db));
     const xlsxPath = join(options.outputDir, "review.xlsx");

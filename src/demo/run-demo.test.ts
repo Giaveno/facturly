@@ -33,7 +33,7 @@ describe("demo smoke test — offline end-to-end", () => {
 
       // 2. The blocked (low-confidence) row was refused by the emission guard.
       expect(result.blockedRefused).toBe(true);
-      expect(result.blockedRefusalReason).toContain("BLOCKED");
+      expect(result.blockedRefusalReason).toContain("aprobadas");
 
       // 3. The no-CUIT row was flagged and NOT approvable.
       expect(result.flaggedReason).toContain("CUIT");

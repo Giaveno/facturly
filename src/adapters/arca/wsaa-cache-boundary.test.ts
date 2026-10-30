@@ -63,11 +63,18 @@ describe("WSAA cache boundary", () => {
     expect(violations("scripts/regression.ts", text).length).toBeGreaterThan(0);
   });
 
-  it.each(["scripts/homologacion-spike.ts", "src/lib/homologacion/live-session.ts"])("keeps %s wired to the shared durable store and cache.get", path => {
+  it.each(["src/lib/homologacion/live-session.ts"])("keeps %s wired to the shared durable store and cache.get", path => {
     const text = readFileSync(resolve(root, path), "utf8");
     expect(text).toMatch(/new DrizzleTaCacheStore\(/);
     expect(text).toMatch(/createCredentialTaCache\(/);
     expect(text).toMatch(/\.get\("wsfe"\)/);
     expect(text).not.toMatch(/\.evict\(/);
+  });
+
+  it("keeps the retired spike unreachable without a cache or direct issuance bypass", () => {
+    const text = readFileSync(resolve(root, "scripts/homologacion-spike.ts"), "utf8");
+    expect(text).toMatch(/async function main\(\)\s*\{\s*throw new Error\("Diagnostic issuance retired/);
+    expect(text).not.toMatch(/\.solicitar\(/);
+    expect(violations("scripts/homologacion-spike.ts", text)).toEqual([]);
   });
 });
