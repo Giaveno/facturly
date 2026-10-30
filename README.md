@@ -58,6 +58,13 @@ protected by `src/middleware.ts`; unauthenticated page requests redirect to
 `/login`, unauthenticated API requests get a 401. NextAuth's own routes
 (`/api/auth`) and the Inngest endpoint (`/api/inngest`) are exempt.
 
+## Workspace interface
+
+- Upload: choose the issuing company, drag images into the upload area or use **Elegir archivos**, then review the selected filenames before uploading. Remove individual files or clear the selection before submitting. The server enforces JPG/PNG/WebP, 10 images, 10 MiB per image and the total request limit.
+- Clients: open **Registrar nueva empresa** to add an issuer. Each company card exposes its existing editing, delegation and point-of-sale controls under **Administrar empresa**.
+- On mobile, open the navigation menu from the top bar; Escape or the close button dismisses it. The top bar displays the configured fiscal environment, not a simulated status.
+- Visual changes do not combine review confirmation with fiscal approval. No invoice is emitted by selecting files, opening cards or navigating.
+
 ## Inngest (background jobs)
 
 The emission, OCR, and lost-CAE recovery jobs are served at `/api/inngest`.
