@@ -23,6 +23,9 @@ import {
   MAX_DISCARD_REASON_LENGTH,
   rejectInvoice,
 } from "./workflow";
+import { buildReviewFiscalData } from "@/domain/review-fiscal-data";
+import { buildFecaReq } from "@/lib/emission/emission-service";
+import { buildFecaesolicitarEnvelope, fecaReqToSolicitar } from "@/adapters/arca/wsfe";
 import type { Db } from "@/lib/db/types";
 
 const FIXED_DATE = new Date("2026-09-22T00:00:00.000Z");
@@ -87,6 +90,33 @@ describe("review workflow — invoice status machine (server-side)", () => {
       .returning();
     return row!.id;
   }
+
+  it("review preview matches the actual approved CF request fiscal values", async () => {
+    const rowId = await seedRow("CORRECTED", null);
+    await db.update(ocrRows).set({ recipientMode: "consumer_final" }).where(eq(ocrRows.id, rowId));
+    const inv = await materializeInvoice(db, rowId);
+    await markInvoiceReviewed(db, inv.id);
+    const ctx = await loadInvoiceContext(db, inv.id);
+    const preview = buildReviewFiscalData({ ...ctx.row, issuerCondition: ctx.client.condicionIva }, null);
+    const approved = await approveInvoice(db, gateway, inv.id, () => FIXED_DATE);
+    const payload = fecaReqToSolicitar(buildFecaReq(approved, ctx.client, 42));
+    expect(payload).toMatchObject({ cbteTipo: preview.cbteTipo, concepto: 1,
+      docTipo: preview.receptorDocTipo, docNro: preview.receptorDocNro,
+      condicionIvaReceptorId: preview.condicionIvaReceptorId,
+      impNetoCentavos: preview.amounts.net, impIvaCentavos: preview.amounts.iva,
+      impTotalCentavos: preview.amounts.total, monId: "PES", monCotiz: 1,
+      cbteFch: "2026-09-22", fchVtoPago: "2026-09-22", cbteNro: 42, ptoVta: ctx.client.ptoVta,
+      iva: [{ id: 5, baseImpCentavos: preview.amounts.net, importeCentavos: preview.amounts.iva }] });
+    const soap = buildFecaesolicitarEnvelope({ cuit: ctx.client.cuit, token: "fake", sign: "fake" }, payload);
+    for (const [tag, value] of Object.entries({ PtoVta: ctx.client.ptoVta, CbteTipo: preview.cbteTipo,
+      DocTipo: preview.receptorDocTipo, DocNro: preview.receptorDocNro, CondicionIVAReceptorId: preview.condicionIvaReceptorId,
+      ImpNeto: "1000.00", ImpIVA: "210.00", ImpTotal: "1210.00", CbteFch: "20260922", Concepto: 1, MonId: "PES" })) {
+      expect(soap).toContain(`<ar:${tag}>${value}</ar:${tag}>`);
+    }
+    expect(soap).not.toContain("FchVtoPago");
+    expect(soap).not.toContain("RazonSocial");
+    expect(soap).not.toContain("Items");
+  });
 
   it("materializes a CONFIDENT row as PENDING (awaiting review)", async () => {
     const rowId = await seedRow("CONFIDENT", "30710145764");

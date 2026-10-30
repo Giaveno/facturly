@@ -32,3 +32,24 @@ describe("review workbench server markup (not browser verification)",()=>{
  it.each(["PENDING","FAILED"])("explains unfinished extraction %s and exposes no edit action",status=>{const html=render([{...row,status,failed:status==="FAILED"}]);expect(html).not.toContain(">Editar datos<");expect(html).toContain("Actualizar estado");});
  it.each(["APPROVED","EMITTING","EMITTED","EMIT_ERROR","EMIT_FAILED","REJECTED"])("%s is read-only",invoiceStatus=>{const html=render([{...row,invoiceStatus}]);expect(html).toContain("Edición no disponible");expect(html).not.toContain(">Editar datos<");expect(html).not.toContain(">Confirmar revisión<");});
 });
+
+
+describe("reviewed fiscal details", () => {
+ it("shows every fiscal field for reviewed CF without using stale OCR identity", () => {
+  const html = render([{...row, invoiceStatus:"REVIEWED", recipientMode:"consumer_final", fields:{...row.fields, amount:121000}}]);
+  for (const label of ["Detalle completo para facturar", "Factura B (006)", "PtoVta", "DocTipo", "DocNro", "CondicionIVAReceptorId", "CbteFch", "FchVtoPago", "MonId", "MonCotiz", "ImpNeto", "ImpIVA", "ImpTotal", "ImpTotConc", "ImpOpEx", "ImpTrib", "CantReg", "CbteDesde / CbteHasta", "Base", "Homologaci\u00f3n: sin validez fiscal"]) expect(html).toContain(label);
+  expect(html).not.toContain("30710145764");
+  expect(html).toContain("no extrae ni env\u00eda un detalle");
+ });
+ it("does not invent registry values or show a preview before review", () => {
+  expect(render([row])).not.toContain("Detalle completo para facturar");
+  const html=render([{...row, invoiceStatus:"REVIEWED"}]);
+  expect(html).toContain("Pendiente de verificar en Padr\u00f3n al aprobar");
+  expect(html).not.toContain("Factura B (006)");
+ });
+ it("shows a C invoice without IVA for an exempt issuer", () => {
+  const html=render([{...row, invoiceStatus:"REVIEWED", issuerCondition:"exento", taxRate:null}]);
+  expect(html).toContain("Factura C (011)"); expect(html).toContain("sin IVA");
+  expect(html).toContain("Pendiente de verificar en Padr\u00f3n al aprobar");
+ });
+});

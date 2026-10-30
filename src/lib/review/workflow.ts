@@ -28,11 +28,9 @@ import { CorrectionValidationError, validateCorrections } from "@/domain/receipt
 import { invoiceStatusForRow } from "@/domain/emission";
 import {
   cbteTipo,
-  RECEPTOR_DOC_TIPO_CUIT,
   type CondicionIVA,
 } from "@/domain/policy";
-import { condicionIvaToReceptorId } from "@/adapters/arca/padron";
-import { deriveAmounts } from "@/domain/amounts";
+import { buildReviewFiscalData } from "@/domain/review-fiscal-data";
 import { isValidCuit } from "@/domain/cuit";
 import { writeAudit } from "@/lib/audit/audit";
 import type { Db } from "@/lib/db/types";
@@ -219,9 +217,6 @@ async function approveInvoiceLocked(
   const payerCuit = row.recipientMode === "identified" && row.cuit && isValidCuit(row.cuit) ? row.cuit.replace(/[ -]/g, "") : null;
 
   let condicion: CondicionIVA | "unresolved";
-  let receptorDocTipo: number;
-  let receptorDocNro: number;
-  let condicionIvaReceptorId: number;
   if (payerCuit) {
     try { condicion = await gateway.getIvaCondition(client.cuit, payerCuit); }
     catch {
@@ -241,20 +236,14 @@ async function approveInvoiceLocked(
     }
     // DocTipo is the RECEPTOR DOCUMENT TYPE (80 = CUIT), NOT the IVA condition
     // id. The condition travels separately as `CondicionIVAReceptorId` (C1).
-    receptorDocTipo = RECEPTOR_DOC_TIPO_CUIT;
-    receptorDocNro = Number(payerCuit);
-    condicionIvaReceptorId = condicionIvaToReceptorId(condicion);
   } else {
     // Explicit anonymous mode only; readiness rejects missing identified CUIT.
     condicion = "consumidorFinal";
-    receptorDocTipo = 99;
-    receptorDocNro = 0;
-    condicionIvaReceptorId = 5;
   }
 
   const decision = cbteTipo(client.condicionIva, condicion);
-  const total = row.fields.amount;
-  const amounts = deriveAmounts(total, decision.cbteTipo, row.taxRate);
+  const fiscal = buildReviewFiscalData({ ...row, issuerCondition: client.condicionIva }, condicion);
+  const amounts = fiscal.amounts;
   const today = clock().toISOString().slice(0, 10);
 
   const [updated] = await db
@@ -263,10 +252,10 @@ async function approveInvoiceLocked(
       status: "APPROVED",
       approvalSnapshot,
       cbteTipo: decision.cbteTipo,
-      receptorDocTipo,
-      receptorDocNro,
-      condicionIvaReceptorId,
-      receptorRazonSocial: row.recipientMode === "consumer_final" ? "Consumidor Final" : row.fields.name,
+      receptorDocTipo: fiscal.receptorDocTipo,
+      receptorDocNro: fiscal.receptorDocNro,
+      condicionIvaReceptorId: fiscal.condicionIvaReceptorId,
+      receptorRazonSocial: fiscal.receptorRazonSocial,
       taxRate: decision.cbteTipo === 11 ? null : row.taxRate,
       fechaEmision: today,
       fechaVto: today,
@@ -288,9 +277,9 @@ async function approveInvoiceLocked(
     payload: {
       clientCuit: client.cuit,
       cbteTipo: decision.cbteTipo,
-      condicionIvaReceptorId,
-      receptorDocTipo,
-      receptorDocNro,
+      condicionIvaReceptorId: fiscal.condicionIvaReceptorId,
+      receptorDocTipo: fiscal.receptorDocTipo,
+      receptorDocNro: fiscal.receptorDocNro,
     },
   });
   return updated;

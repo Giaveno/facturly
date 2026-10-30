@@ -34,3 +34,9 @@
 .review-page .queue-list::-webkit-scrollbar-thumb{background:#63717E;border:2px solid #E9ECEF;border-radius:6px}
 .review-page .queue-list:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 @media(min-width:761px) and (max-width:1120px){.review-page .queue{max-height:70vh;align-self:start}.review-page .queue-list{flex-basis:auto}}
+
+.fiscal-preview { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border, #ddd); }
+.fiscal-preview dl { display: grid; gap: 12px; }
+.fiscal-preview dt { font-size: 12px; color: var(--text-muted, #666); }
+.fiscal-preview dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+.approval-dialog { max-height: 90vh; overflow-y: auto; }
