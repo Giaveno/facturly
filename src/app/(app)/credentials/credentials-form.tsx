@@ -24,8 +24,8 @@ export default function CredentialsForm({ initialCertificate = null }: { initial
   }
 
   return (
-    <div className="surface form-stack">
-      <form className="form-stack" onSubmit={onSubmit}>
+    <div className="surface form-stack credential-summary credential-editor">
+      <form className="form-stack credential-pem-form" onSubmit={onSubmit}>
         <label>Certificado público (PEM)<textarea name="certPem" rows={6} required /></label>
         <label>Clave privada (PEM)<textarea name="keyPem" rows={8} required autoComplete="off" /></label>
         <button type="submit" disabled={state.saving}>{state.saving ? "Guardando…" : "Guardar credenciales"}</button>
@@ -35,7 +35,7 @@ export default function CredentialsForm({ initialCertificate = null }: { initial
       <section className="form-stack" aria-labelledby="connection-check-heading">
         <h3 id="connection-check-heading">Autenticación en homologación</h3>
         <p className="helper-note">Esta prueba solo verifica la autenticación WSAA para WSFE y Padrón A5; no emite comprobantes. El punto de venta, el emisor y las validaciones fiscales se comprueban por separado.</p>
-        <button type="button" disabled={state.saving || state.checking || !state.certificate} onClick={() => void flow.check()}>
+        <button className="button secondary" type="button" disabled={state.saving || state.checking || !state.certificate} onClick={() => void flow.check()}>
           {state.checking ? "Probando conexión…" : "Probar conexión en homologación"}
         </button>
         <div aria-live="polite" aria-busy={state.checking}>

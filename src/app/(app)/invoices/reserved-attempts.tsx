@@ -86,7 +86,7 @@ function Attempt({ row, enabled }: {
         }
     }
     const report = result?.report;
-    return <article className="card">
+    return <article className="surface reserved-attempt">
     <h3>Reserva {row.cbteTipo} / PV {row.ptoVta} / Nº {row.cbteNro}</h3>
     <p>CUIT emisor: {row.cuit} · Importe: {formatCentavos(row.importeTotalCentavos)}</p>
     <p>Referencia: {row.invoiceId}</p>
@@ -113,7 +113,7 @@ export function ReservedAttempts({ rows, enabled }: {
     rows: ReservedAttemptRow[];
     enabled: boolean;
 }) {
-    return <section aria-labelledby="reserved-attempts-title">
+    return <section className="page-section reserved-attempts" aria-labelledby="reserved-attempts-title">
     <h2 id="reserved-attempts-title">Intentos anteriores con número reservado — sin CAE local</h2>
     <p>Solo homologación: comprobantes de prueba sin validez fiscal. Consultar no emite, reintenta ni cambia estados; tampoco habilita un PDF. Comparta el resultado antes de decidir cualquier recuperación.</p>
     {!rows.length && <p>No hay intentos con número reservado pendientes de verificación.</p>}
