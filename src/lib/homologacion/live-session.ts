@@ -81,53 +81,9 @@ export async function createDiagnosticSession(db:Db,env:Record<string,string|und
   },
   points:auth=>wsfe.getPointsOfSale(auth),ultimo:(auth,ptoVta)=>wsfe.ultimoAutorizado(auth,{ptoVta,cbteTipo:11}),types:auth=>wsfe.getTiposCbte(auth),
   consult:async(auth,request)=>{try{return matchConsultation(request,await wsfe.consultarComprobante(auth,{ptoVta:request.ptoVta,cbteTipo:request.cbteTipo,cbteNro:request.cbteNro}));}catch(error){if(error instanceof ArcaQueryError&&error.diagnostic.category==="provider-errors"&&error.diagnostic.providerCodes?.length===1&&error.diagnostic.providerCodes[0]===602)return null;throw error;}},
-  beginOnce:async(invoiceId,request)=>{
-   if(!migrationReady||claimed)throw Error("Durable one-shot prerequisites missing or already claimed");
-   const key=seriesKey("homologacion",request.cuit,request.ptoVta,request.cbteTipo),owner=randomUUID();
-   if(!await acquireSeriesClaim(db,key,owner))throw Error("Series is claimed/uncertain; manual reconciliation required");
-   try{
-    if(!sessionAuth)throw Error("Preflight authentication required");
-    const currentLast=await wsfe.ultimoAutorizado(sessionAuth,{ptoVta:request.ptoVta,cbteTipo:request.cbteTipo});
-    if(currentLast+1!==request.cbteNro)throw Error("ARCA sequence changed since authorization; no issuance");
-    let reservationId="";
-    await db.transaction(async tx=>{
-     const current=await loadInvoiceContext(tx as unknown as Db,invoiceId);
-     assertRowEmittable(current.row.status);
-     const actual=buildFecaReq(current.invoice,current.client,request.cbteNro);
-     if(current.invoice.status!=="APPROVED"||current.client.id!==clientId||current.client.condicionIva!=="exento"||actual.cbteTipo!==11||!sameRequest(request,actual)||!current.invoice.approvalSnapshot||!matchesApprovalSnapshot(current.invoice.approvalSnapshot,createApprovalSnapshot(current.row,current.client,"homologacion")))throw Error("Approved invoice does not match whole explicit authorization");
-     const heads=await tx.select({id:issuedInvoices.id}).from(issuedInvoices).where(and(eq(issuedInvoices.cuit,request.cuit),eq(issuedInvoices.ptoVta,request.ptoVta),eq(issuedInvoices.cbteTipo,request.cbteTipo),or(eq(issuedInvoices.environment,"homologacion"),isNull(issuedInvoices.environment)),or(isNull(issuedInvoices.cae),isNull(issuedInvoices.environment))));
-     if(heads.length)throw Error("Existing reserved/unknown head blocks issuance");
-     const tupleKey=JSON.stringify(["homologacion",request.cuit,request.ptoVta,request.cbteTipo,request.cbteNro]);
-     await tx.insert(diagnosticIssuance).values({tupleKey,authorizationHash:createHash("sha256").update(JSON.stringify(actual)).digest("hex")});
-     const [reserved]=await tx.insert(issuedInvoices).values({environment:"homologacion",invoiceId,cuit:request.cuit,ptoVta:request.ptoVta,cbteTipo:request.cbteTipo,cbteNro:request.cbteNro,importeTotalCentavos:request.importeTotal}).returning();
-     reservationId=reserved!.id;
-     await tx.update(invoices).set({status:"EMITTING"}).where(eq(invoices.id,invoiceId));
-    });
-    claimed={key,owner,invoiceId,request,reservationId,dispatched:false};
-   }catch{await finishSeriesClaim(db,key,owner,false);throw Error("One-shot claim blocked; no issuance occurred");}
-  },
-  issue:async(auth,request)=>{
-   if(!claimed||!sameRequest(request,claimed.request))throw Error("Durable marker required");
-   // Consume in-process dispatch permission BEFORE sending, including synchronous errors.
-   if(claimed.dispatched)throw Error("Second issue prohibited");
-   claimed.dispatched=true;
-   if(!await ownsSeriesClaim(db,claimed.key,claimed.owner))throw Error("Dispatch claim lost/expired; consult first");
-   const result=await wsfe.solicitar(auth,fecaReqToSolicitar(request));
-   if(result.resultado!=="A"||!result.cae||!result.caeFchVto||result.cbteNro!==request.cbteNro){
-    const code=result.errors[0]?.code??result.observaciones[0]?.code;
-    throw new ArcaBusinessError("ARCA rejected diagnostic emission",{code,stage:"issuance",category:"provider-errors",providerCodes:[...result.errors,...result.observaciones].filter(x=>/^\d{1,9}$/.test(x.code)).map(x=>Number(x.code))});
-   }
-   return {cae:result.cae,caeFchVto:result.caeFchVto,cbteNro:result.cbteNro};
-  },
-  complete:async(invoiceId,request,result)=>{
-   if(!claimed||claimed.invoiceId!==invoiceId||!sameRequest(request,claimed.request)||result.cbteNro!==request.cbteNro)throw Error("Authorization mismatch");
-   await db.transaction(async tx=>{
-    await tx.update(issuedInvoices).set({cae:result.cae,caeFchVto:result.caeFchVto}).where(eq(issuedInvoices.id,claimed!.reservationId));
-    await tx.update(invoices).set({status:"EMITTED"}).where(eq(invoices.id,invoiceId));
-    await finishSeriesClaim(tx as unknown as Db,claimed!.key,claimed!.owner,true);
-   });
-   if(options.onAuthorized)try{await options.onAuthorized(request,result);}catch{(options.write??console.log)("Authorization persisted; PDF generation failed. Do not reissue.");}
-  },
+  beginOnce:async()=>{throw Error("Diagnostic issuance retired; use emitComprobante");},
+  issue:async()=>{throw Error("Diagnostic issuance retired; use emitComprobante");},
+  complete:async()=>{throw Error("Diagnostic issuance retired; use emitComprobante");},
   close:async()=>{if(claimed)await finishSeriesClaim(db,claimed.key,claimed.owner,false);secrets.fill("");keyPem="";},
  };
 }

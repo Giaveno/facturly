@@ -1,11 +1,12 @@
 import { eq } from "drizzle-orm";
-import { invoices, issuedInvoices } from "@/lib/db/schema";
+import { invoices, issuedInvoices, comprobantes } from "@/lib/db/schema";
 import { loadInvoiceContext } from "@/lib/review/workflow";
 import { assertRowEmittable } from "@/domain/emission";
 import { createApprovalSnapshot, matchesApprovalSnapshot } from "@/domain/approval-snapshot";
 import type { ComprobanteItem } from "@/domain/comprobantes";
 import { assertEmissionConfiguration } from "@/adapters/arca/emissions";
-import { emitComprobante, type ComprobanteEmissionDeps, type ComprobanteEmissionInput } from "./comprobante-emission-service";
+import { emitComprobante, recoverSeriesClaim, type ComprobanteEmissionDeps, type ComprobanteEmissionInput } from "./comprobante-emission-service";
+import { seriesKey } from "./series-claim";
 import { resolveArcaEnvironment } from "./environment";
 import { ArcaError, safeEmissionError } from "@/adapters/arca/errors";
 
@@ -59,6 +60,26 @@ export async function emitReviewedBatch(deps: ComprobanteEmissionDeps, invoiceId
     }
   }
   return outcomes;
+}
+
+/** Scheduled recovery consults canonical reservations only and never issues. */
+export async function recoverCanonicalSeries(deps: ComprobanteEmissionDeps) {
+  assertEmissionConfiguration(deps.env ?? process.env);
+  const environment = deps.environment ?? resolveArcaEnvironment(deps.env ?? process.env);
+  const storedEnvironment = environment === "production" ? "produccion" : environment;
+  const rows = await deps.db.select().from(comprobantes).where(eq(comprobantes.ambiente, storedEnvironment));
+  const seen = new Set<string>();
+  const recovered: import("./emission-service").EmissionBatchResult[] = [];
+  for (const row of rows) {
+    if (row.estado !== "pendiente" && row.estado !== "incierto") continue;
+    const key = seriesKey(environment, row.emisorCuit, row.ptoVta, row.cbteTipo);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await recoverSeriesClaim(deps, { key, environment: storedEnvironment, emisorCuit: row.emisorCuit, ptoVta: row.ptoVta, cbteTipo: row.cbteTipo });
+    const [resolved] = await deps.db.select().from(comprobantes).where(eq(comprobantes.id, row.id));
+    recovered.push({ invoiceId: row.id, outcome: resolved?.estado === "aprobado" ? "already_emitted" : resolved?.estado === "rechazado" ? "failed_permanent" : "failed_transient" });
+  }
+  return recovered;
 }
 
 

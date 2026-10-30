@@ -92,84 +92,8 @@ function loadKeyPem(): string {
   return readFileSync(filePath, "utf8");
 }
 
-async function main(): Promise<void> {
-  const envName = env("ARCA_ENV") ?? "homologacion";
-  if (envName !== "homologacion") {
-    failMisconfigured('ARCA_ENV must be "homologacion"; production is not supported.');
-  }
-  const arcaEnv = envName;
-  if (!env("DATABASE_URL")) {
-    failMisconfigured("DATABASE_URL is required: use the same Neon database as the app for persistent WSAA tickets.");
-  }
-
-  const clientCuit = env("ARCA_CLIENT_CUIT");
-  if (!clientCuit) {
-    failMisconfigured(
-      "ARCA_CLIENT_CUIT is required — the delegated CLIENT CUIT whose wsfe " +
-        "delegation this gate validates.",
-    );
-  }
-
-  const certPem = loadCertPem();
-  const keyPem = loadKeyPem();
-
-  const ptoVta = Number(env("ARCA_PTO_VTA") ?? "1");
-  const cbteTipo = Number(env("ARCA_CBTE_TIPO") ?? "6");
-
-  const wsaaUrl = WSAA_HOMOLOGACION_URL;
-  const wsfeUrl = WSFE_HOMOLOGACION_URL;
-  // 20s per-call timeout so a hung ARCA call cannot pin the harness forever.
-  const transport = createFetchTransport({ timeoutMs: 20_000 });
-
-  console.log(`\nHOMOLOGACIÓN GATE — environment: ${arcaEnv}`);
-  console.log(`  WSAA:  ${wsaaUrl}`);
-  console.log(`  WSFEv1: ${wsfeUrl}`);
-  console.log(`  Client CUIT: ${clientCuit}  PtoVta: ${ptoVta}  CbteTipo: ${cbteTipo}\n`);
-
-  // 1. Reuse the app's certificate/endpoint/service-scoped durable ticket.
-  console.log("[1/3] Obtain wsfe ticket through the persistent app cache…");
-  const cache = createCredentialTaCache({
-    url: wsaaUrl,
-    credentials: { certPem, keyPem },
-    transport,
-    store: new DrizzleTaCacheStore(getDb()),
-  });
-  const ta = await cache.get("wsfe");
-  console.log("      TA obtained (token/sign held in memory, never printed).");
-
-  // 2. Determine the next comprobante number.
-  const wsfe = new WsfeClient({ url: wsfeUrl, transport });
-  const auth = { token: ta.token, sign: ta.sign, cuit: clientCuit };
-  const lastNro = await wsfe.ultimoAutorizado(auth, { ptoVta, cbteTipo });
-  const cbteNro = lastNro + 1;
-  console.log(`[2/3] FECompUltimoAutorizado → last ${lastNro}, next ${cbteNro}.`);
-
-  // 3. Emit a minimal Factura B to consumidor final (Auth.Cuit = client CUIT).
-  const req: FecaesolicitarRequest = {
-    ptoVta,
-    cbteTipo,
-    cbteNro,
-    concepto: 1,
-    docTipo: 99, // consumidor final
-    docNro: 0,
-    condicionIvaReceptorId: 5, // consumidor final (RG 5616)
-    cbteFch: new Date().toISOString().slice(0, 10),
-    impNetoCentavos: 100,
-    impIvaCentavos: 0,
-    impTotalCentavos: 100,
-    fchVtoPago: new Date().toISOString().slice(0, 10),
-    monId: "PES",
-    monCotiz: 1,
-    iva: [],
-  };
-  console.log("[3/3] FECAESolicitar with Auth.Cuit = <client CUIT>…");
-  const result = await wsfe.solicitar(auth, req);
-
-  const verdict = evaluateEmissionResult(result);
-  console.log(`\n${verdict.passed ? "✓ PASS" : "✗ FAIL"} — ${verdict.criterion}`);
-  console.log(`  ${verdict.detail}\n`);
-
-  process.exit(verdict.passed ? 0 : 1);
+async function main() {
+  throw new Error("Diagnostic issuance retired; use the normal application emission service");
 }
 
 main().catch((err) => {

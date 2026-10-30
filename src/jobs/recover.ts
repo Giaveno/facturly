@@ -46,6 +46,6 @@ export const recoverStuckEmissionsJob = inngest.createFunction(
         delayMs: 1000,
       }),
     );
-    return { recovered: results.length };
+    return { recovered: results.filter(result => result.outcome === "already_emitted").length, rejected: results.filter(result => result.outcome === "failed_permanent").length, blocked: results.filter(result => result.outcome === "failed_transient").length };
   },
 );

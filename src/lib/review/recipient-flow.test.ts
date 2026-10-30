@@ -12,7 +12,7 @@ import { processOcrRow } from "@/lib/ocr/process";
 import { OcrFake } from "@/adapters/ocr/ocr.fake";
 import { listExportRows } from "@/adapters/export";
 import { loadIssuedInvoicePdfInput } from "@/lib/invoices/read-model";
-import { emitInvoice, NumberAllocator } from "@/lib/emission/emission-service";
+import { emitReviewedInvoice } from "@/lib/emission/review-emission-service";
 
 describe("primary explicit recipient flow (offline)", () => {
  let db: Db; let close: () => Promise<void>; let mono: string; let ri: string;
@@ -83,7 +83,7 @@ describe("primary explicit recipient flow (offline)", () => {
   expect(lookup).toHaveBeenNthCalledWith(2,"30710145764","30710145764");
  });
  it("RI consumer-final B needs explicit taxable rate before confirmation",async()=>{
-  const {row,invoiceId}=await seed(ri);await expect(markInvoiceReviewed(db,invoiceId)).rejects.toThrow(/alícuota/);
+  const {row,invoiceId}=await seed(ri);await expect(markInvoiceReviewed(db,invoiceId)).rejects.toThrow(/IVA/);
   await saveCorrections(db,row.id,{...row.fields,cuit:"",recipientMode:"consumer_final",taxRate:10.5});
   await markInvoiceReviewed(db,invoiceId);const gateway=new ArcaGatewayFake();const lookup=vi.spyOn(gateway,"getIvaCondition");
   expect(await approveInvoice(db,gateway,invoiceId)).toMatchObject({cbteTipo:6,importeNetoCentavos:10950,importeIvaCentavos:1150,taxRate:10.5});expect(lookup).not.toHaveBeenCalled();
@@ -113,7 +113,7 @@ describe("primary explicit recipient flow (offline)", () => {
   expect(approved).toHaveProperty("approvalSnapshot.environment","homologacion");
   await db.insert(delegations).values({clientId:mono,cuit:"20123456786",enabled:true}).onConflictDoNothing();
   await db.update(clients).set({ptoVta:2}).where(eq(clients.id,mono));
-  try {await expect(emitInvoice({db,gateway,emissionsEnabled:true},new NumberAllocator(gateway),invoiceId)).rejects.toThrow(/snapshot/);}
+  try {await expect(emitReviewedInvoice({db,gateway,env:{EMISSIONS_ENABLED:"true",ARCA_ENV:"homologacion"}},invoiceId)).rejects.toThrow(/aprobaci/);}
   finally {await db.update(clients).set({ptoVta:1}).where(eq(clients.id,mono));}
   expect(ultimo).not.toHaveBeenCalled();expect(issue).not.toHaveBeenCalled();
   expect(await db.select().from(issuedInvoices).where(eq(issuedInvoices.invoiceId,invoiceId))).toEqual([]);
@@ -122,9 +122,9 @@ describe("primary explicit recipient flow (offline)", () => {
  it("rejects environment or persisted recipient drift before dispatch",async()=>{
   const {row,invoiceId}=await seed();const gateway=new ArcaGatewayFake();const ultimo=vi.spyOn(gateway,"ultimoAutorizado");const issue=vi.spyOn(gateway,"issueInvoice");
   await markInvoiceReviewed(db,invoiceId);await approveInvoice(db,gateway,invoiceId,undefined,undefined,"homologacion");
-  await expect(emitInvoice({db,gateway,emissionsEnabled:true,environment:"production"},new NumberAllocator(gateway),invoiceId)).rejects.toThrow(/snapshot/);
+  await expect(emitReviewedInvoice({db,gateway,env:{EMISSIONS_ENABLED:"true",ARCA_ENV:"homologacion"},environment:"production"},invoiceId)).rejects.toThrow(/aprobaci/);
   await db.update(ocrRows).set({recipientMode:"identified"}).where(eq(ocrRows.id,row.id));
-  await expect(emitInvoice({db,gateway,emissionsEnabled:true,environment:"homologacion"},new NumberAllocator(gateway),invoiceId)).rejects.toThrow(/snapshot/);
+  await expect(emitReviewedInvoice({db,gateway,env:{EMISSIONS_ENABLED:"true",ARCA_ENV:"homologacion"},environment:"homologacion"},invoiceId)).rejects.toThrow(/aprobaci/);
   expect(ultimo).not.toHaveBeenCalled();expect(issue).not.toHaveBeenCalled();
  });
  it.each(["APPROVED","EMITTING","EMIT_ERROR"] as const)("legacy taxable A %s without reviewed rate fails before numbering",async status=>{
@@ -133,7 +133,7 @@ describe("primary explicit recipient flow (offline)", () => {
   await db.update(invoices).set({status,taxRate:null,approvalSnapshot:null}).where(eq(invoices.id,invoiceId));
   await db.insert(delegations).values({clientId:ri,cuit:"30710145764",enabled:true}).onConflictDoNothing();
   const ultimo=vi.spyOn(gateway,"ultimoAutorizado").mockRejectedValue(new Error("Unexpected numbering call"));const issue=vi.spyOn(gateway,"issueInvoice");
-  await expect(emitInvoice({db,gateway,emissionsEnabled:true},new NumberAllocator(gateway),invoiceId)).rejects.toThrow(/alícuota|IVA|taxable/);
+  await expect(emitReviewedInvoice({db,gateway,env:{EMISSIONS_ENABLED:"true",ARCA_ENV:"homologacion"}},invoiceId)).rejects.toThrow(/aprobaci|aprobadas/);
   expect(ultimo).not.toHaveBeenCalled();expect(issue).not.toHaveBeenCalled();
  });
 });

@@ -69,12 +69,14 @@ describe("recoverStuckEmissionsJob — scheduled recovery wiring (C2)", () => {
     vi.mocked(getDb).mockReturnValue(db);
     vi.mocked(buildArcaGateway).mockReturnValue(gateway);
     recover.mockResolvedValue([
-      { invoiceId: "invoice-1", outcome: "emitted", cbteNro: 4 },
+      { invoiceId: "invoice-1", outcome: "already_emitted", cbteNro: 4 },
+      { invoiceId: "invoice-2", outcome: "failed_permanent" },
+      { invoiceId: "invoice-3", outcome: "failed_transient" },
     ] as never);
 
     const { fn } = recoverStuckEmissionsJob as unknown as JobLike;
     const step = { run: vi.fn(async (_id: string, run: () => unknown) => run()) };
-    await expect(fn({ step })).resolves.toEqual({ recovered: 1 });
+    await expect(fn({ step })).resolves.toEqual({ recovered: 1, rejected: 1, blocked: 1 });
 
     expect(step.run).toHaveBeenCalledWith("recover-stuck", expect.any(Function));
     expect(getDb).toHaveBeenCalledTimes(2);
