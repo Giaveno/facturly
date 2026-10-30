@@ -25,6 +25,42 @@ export type EmissionStage = "ultimo" | "issuance";
 /** The three failure classes ARCA integration distinguishes. */
 export type ArcaErrorKind = "transient" | "business" | "auth";
 
+type KnownFaultCode =
+  | "coe.alreadyAuthenticated"
+  | "coe.notAuthorized"
+  | "cms.cert.untrusted"
+  | "cms.cert.expired"
+  | "cms.sign.invalid"
+  | "xml.generationTime.invalid"
+  | "xml.expirationTime.expired";
+
+const ALLOWED_FAULT_CODES: readonly KnownFaultCode[] = [
+  "coe.alreadyAuthenticated",
+  "coe.notAuthorized",
+  "cms.cert.untrusted",
+  "cms.cert.expired",
+  "cms.sign.invalid",
+  "xml.generationTime.invalid",
+  "xml.expirationTime.expired",
+];
+
+export type NormalizedFaultCode = KnownFaultCode | "unknown";
+
+function isAllowedFaultCode(value: string): value is KnownFaultCode {
+  return ALLOWED_FAULT_CODES.some((faultcode) => faultcode === value);
+}
+
+function unqualifiedFaultCode(faultcode: string | undefined): string {
+  const trimmed = faultcode?.trim() ?? "";
+  const separator = trimmed.lastIndexOf(":");
+  return separator >= 0 ? trimmed.slice(separator + 1) : trimmed;
+}
+
+export function normalizeFaultCode(faultcode: string | undefined): NormalizedFaultCode {
+  const unqualified = unqualifiedFaultCode(faultcode);
+  return isAllowedFaultCode(unqualified) ? unqualified : "unknown";
+}
+
 /** Options common to every ARCA error. */
 export interface ArcaErrorOptions {
   kind: ArcaErrorKind;
@@ -61,8 +97,8 @@ export class ArcaError extends Error {
     this.name = "ArcaError";
     this.kind = options.kind;
     this.code = options.code;
-    this.faultcode = options.faultcode;
-    this.faultstring = options.faultstring;
+    this.faultcode = options.faultcode === undefined ? undefined : normalizeFaultCode(options.faultcode);
+    this.faultstring = undefined;
     this.retryAfterMs = options.retryAfterMs;
     this.stage = options.stage;
     this.category = options.category;
@@ -159,18 +195,20 @@ export function hasSoapFault(soapXml: string): boolean {
   return parseSoapFault(soapXml) !== null;
 }
 
-/**
- * Classifies a SOAP `faultcode` into an error kind. SOAP 1.1 uses
- * `soapenv:Server` (transient, retryable) vs `soapenv:Client` (permanent); the
- * auth-ish faults are WSAA/WSFE-specific.
- */
+const FAULT_CODE_KINDS = new Map<string, ArcaErrorKind>([
+  ["coe.alreadyAuthenticated", "business"],
+  ["coe.notAuthorized", "auth"],
+  ["cms.cert.untrusted", "auth"],
+  ["cms.cert.expired", "auth"],
+  ["cms.sign.invalid", "auth"],
+  ["xml.generationTime.invalid", "business"],
+  ["xml.expirationTime.expired", "business"],
+  ["Server", "transient"],
+]);
+
+/** Classifies only explicitly supported SOAP fault codes. */
 export function classifyFaultCode(faultcode: string | undefined): ArcaErrorKind {
-  const c = (faultcode ?? "").toLowerCase();
-  if (/(auth|sign|token|certificate|expired|security|failedauthentication)/.test(c)) {
-    return "auth";
-  }
-  if (c.includes("server")) return "transient";
-  return "business";
+  return FAULT_CODE_KINDS.get(unqualifiedFaultCode(faultcode)) ?? "business";
 }
 
 /**

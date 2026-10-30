@@ -96,19 +96,27 @@ describe("http — createFetchTransport", () => {
     );
   });
 
-  it("surfaces a SOAP Fault arriving as HTTP 500 (fault body read, not discarded)", async () => {
-    const body = `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><soap:Fault><faultcode>soap:Client</faultcode><faultstring>bad request</faultstring></soap:Fault></soap:Body></soap:Envelope>`;
-    const t = transportWith(500, body);
-    const err = await t.post("https://x", "", {}).catch((e) => e);
-    expect(err).toBeInstanceOf(ArcaBusinessError);
-    expect((err as ArcaBusinessError).category).toBe("soap-fault");
-    expect((err as ArcaBusinessError).faultstring).toBeUndefined();
+  it("stores an allowlisted normalized SOAP faultcode without faultstring text", async () => {
+    const body = `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><soap:Fault><faultcode>ns1:coe.notAuthorized</faultcode><faultstring>SECRET provider text</faultstring></soap:Fault></soap:Body></soap:Envelope>`;
+    const err = await transportWith(500, body).post("https://x", "", {}).catch((error) => error);
+    expect(err).toBeInstanceOf(ArcaAuthError);
+    expect(err).toMatchObject({ category: "soap-fault", faultcode: "coe.notAuthorized" });
+    expect((err as ArcaAuthError).faultstring).toBeUndefined();
+    expect(JSON.stringify(err)).not.toContain("SECRET");
   });
 
-  it("surfaces a SOAP Fault arriving as HTTP 200 (not silently mapped to success)", async () => {
+  it("stores unknown for non-allowlisted SOAP faultcodes", async () => {
     const body = `<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><soap:Fault><faultcode>ns2:failedAuthentication</faultcode><faultstring>invalid</faultstring></soap:Fault></soap:Body></soap:Envelope>`;
-    const t = transportWith(200, body);
-    await expect(t.post("https://x", "", {})).rejects.toBeInstanceOf(ArcaAuthError);
+    const err = await transportWith(200, body).post("https://x", "", {}).catch((error) => error);
+    expect(err).toBeInstanceOf(ArcaBusinessError);
+    expect(err).toMatchObject({ faultcode: "unknown" });
+  });
+
+  it("keeps coe.alreadyAuthenticated non-retryable and non-evicting", async () => {
+    const body = `<Envelope><Body><Fault><faultcode>ns1:coe.alreadyAuthenticated</faultcode><faultstring>ticket vigente</faultstring></Fault></Body></Envelope>`;
+    const err = await transportWith(500, body).post("https://x", "", {}).catch((error) => error);
+    expect(err).toBeInstanceOf(ArcaBusinessError);
+    expect(err).toMatchObject({ kind: "business", faultcode: "coe.alreadyAuthenticated" });
   });
 
   it("passes through an empty body on 200 without error", async () => {
