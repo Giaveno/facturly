@@ -200,6 +200,15 @@ async function approveInvoiceLocked(
   environment = resolveArcaEnvironment(process.env),
 ): Promise<typeof invoices.$inferSelect> {
   const { invoice, row, client } = await loadInvoiceContext(db, invoiceId);
+  // Approval is a durable work decision, not a second fiscal state machine.
+  // Re-delivery must retain the original fiscal date and immutable approval.
+  if (invoice.status === "APPROVED") {
+    const current = createApprovalSnapshot(row, client, environment);
+    if (!invoice.approvalSnapshot || !matchesApprovalSnapshot(invoice.approvalSnapshot, current) || (expected && !matchesApprovalSnapshot(expected, current))) {
+      throw new InvoiceStateError(invoiceId, invoice.status, "approve", "approved snapshot changed");
+    }
+    return invoice;
+  }
   if (invoice.status !== "REVIEWED") {
     throw new InvoiceStateError(
       invoiceId,

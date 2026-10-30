@@ -29,7 +29,7 @@ export async function reviewEmissionInput(deps: ComprobanteEmissionDeps, invoice
   const { cbteTipo, receptorDocTipo, receptorDocNro, condicionIvaReceptorId, fechaEmision, importeNetoCentavos, importeIvaCentavos, importeTotalCentavos } = invoice;
   if (cbteTipo == null || receptorDocTipo == null || receptorDocNro == null || condicionIvaReceptorId == null || !fechaEmision || importeNetoCentavos == null || importeIvaCentavos == null || importeTotalCentavos == null) throw new Error("La aprobación no contiene todos los datos fiscales.");
   const fallback: ComprobanteItem = { descripcion: row.fields.name || "Comprobante revisado", netoCentavos: importeNetoCentavos, ivaCentavos: importeIvaCentavos, exentoCentavos: 0, tributosCentavos: 0, totalCentavos: importeTotalCentavos, alicuota: cbteTipo === 11 ? 0 : invoice.taxRate as ComprobanteItem["alicuota"] };
-  const detailed = (row.fields as typeof row.fields & { items?: ComprobanteItem[] }).items;
+  const detailed: ComprobanteItem[] | undefined = invoice.approvalSnapshot.itemSnapshot ? JSON.parse(invoice.approvalSnapshot.itemSnapshot) : undefined;
   return {
     empresaId: client.id, idempotencyKey: reviewIdempotencyKey(invoiceId), emisorCuit: client.cuit, emisorCondicionIva: client.condicionIva,
     cbteTipo, ptoVta: client.ptoVta, concepto: 1, docTipo: receptorDocTipo, docNro: receptorDocNro,

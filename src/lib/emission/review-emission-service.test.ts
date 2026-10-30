@@ -4,6 +4,7 @@ import { clients, batches, photos, ocrRows, comprobantes, issuedInvoices } from 
 import { ArcaGatewayFake } from "@/adapters/arca/arca-gateway.fake";
 import { materializeInvoice, markInvoiceReviewed, approveInvoice } from "@/lib/review/workflow";
 import { emitReviewedBatch, emitReviewedInvoice, reviewEmissionInput } from "./review-emission-service";
+import { matchesApprovalSnapshot } from "@/domain/approval-snapshot";
 
 describe("review uses canonical emission", () => {
   let handle: Awaited<ReturnType<typeof createTestDb>>;
@@ -21,8 +22,14 @@ describe("review uses canonical emission", () => {
     const invoice = await materializeInvoice(db, row!.id);
     await markInvoiceReviewed(db, invoice.id);
     await approveInvoice(db, gateway, invoice.id, now, undefined, "homologacion");
+    const replay = await approveInvoice(db, gateway, invoice.id, () => new Date("2026-10-30T12:00:00Z"), undefined, "homologacion");
+    expect(replay.status).toBe("APPROVED");
+    expect(replay.fechaEmision).toBe("2026-10-29");
     const deps = { db, gateway, now, env, environment: "homologacion" as const };
     const input = await reviewEmissionInput(deps, invoice.id);
+    const snapshot = replay.approvalSnapshot!;
+    expect(matchesApprovalSnapshot({ ...snapshot, itemSnapshot: "[]" }, snapshot)).toBe(false);
+    expect(matchesApprovalSnapshot(snapshot, { ...snapshot, itemSnapshot: "[]" })).toBe(false);
     expect(input.idempotencyKey).toBe(`invoice:${invoice.id}:approve`);
     expect(input.items).toEqual([{ descripcion: "Venta revisada", netoCentavos: 100000, ivaCentavos: 0, exentoCentavos: 0, tributosCentavos: 0, totalCentavos: 100000, alicuota: 0 }]);
     const first = await emitReviewedInvoice(deps, invoice.id);
