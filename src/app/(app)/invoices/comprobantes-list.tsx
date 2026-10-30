@@ -1,4 +1,5 @@
 "use client";
+import { emissionDiagnostic, emissionPhaseLabels } from "@/domain/emission-diagnostic";
 import React, { useEffect, useState } from "react";
 interface Company { id: string; razonSocial: string; }
 interface Comprobante { id: string; empresaId: string; estado: string; resultado?: string | null; cbteTipo?: number | null; cbteNro?: number | null; cae?: string | null; caeVto?: string | null; errores?: string | null }
@@ -9,7 +10,8 @@ export function VerificationAction({ estado, disabled, verifying, onVerify }: { 
   return estado === "incierto" ? <button type="button" disabled={disabled} onClick={onVerify}>{verifying ? "Verificando..." : "Verificar en ARCA"}</button> : null;
 }
 export function KnownArcaCause({ estado, errores }: Pick<Comprobante, "estado" | "errores">) {
-  return <>{errores ?? (estado === "incierto" ? "Autorización pendiente de verificar en ARCA; no vuelva a emitir." : "-")}</>;
+  const diagnostic = emissionDiagnostic(errores);
+  return <>{diagnostic.phase && <strong>Fase: {emissionPhaseLabels[diagnostic.phase] ?? diagnostic.phase}. </strong>}{diagnostic.cause || (estado === "incierto" ? "Autorización pendiente de verificar en ARCA; no vuelva a emitir." : "-")}</>;
 }
 export default function ComprobantesList() {
   const [companies, setCompanies] = useState<Company[]>([]);

@@ -1,3 +1,4 @@
+import { tracePhase } from "@/lib/emission/trace";
 /**
  * Production `ArcaGateway` — composes WSAA (TA) + WSFEv1 (emission) + Padrón A5
  * (IVA condition) behind the existing port. Swappable with `ArcaGatewayFake`.
@@ -120,6 +121,7 @@ export class ArcaGatewayProd implements ArcaGateway {
     // A unique row alone does not serialize dispatch of an existing reservation.
     // An issuance is never retried, even after an authentication error.
     const ta = await this.taCache.get(ARCA_SERVICE_WSFE);
+    tracePhase("preparation");
     return this.emit(ta, req, beforeDispatch, onDispatched);
   }
 

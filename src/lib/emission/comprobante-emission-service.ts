@@ -1,3 +1,4 @@
+import { tracePhase, traceFailure, phaseFailure, emissionPhase, setTraceComprobante, withEmissionTrace } from "./trace";
 import { fiscalDate } from "@/domain/fiscal-date";
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
@@ -226,24 +227,24 @@ async function reconcileOrphans(db: Db, deps: ComprobanteEmissionDeps, key: stri
   const orphans = onlyId ? allOrphans.filter(row => row.id === onlyId) : allOrphans;
   for (const row of orphans) {
     if (row.cbteNro == null || !deps.gateway.consultInvoice) {
-      await updateOrphan(db, key, row.id, { estado: "incierto", errores: RECONCILIATION_UNCERTAIN_REASON });
+      await updateOrphan(db, key, row.id, { estado: "incierto", errores: phaseFailure(RECONCILIATION_UNCERTAIN_REASON, "reconciliation") });
       throw new ComprobanteEmissionError(RECONCILIATION_UNCERTAIN_REASON);
     }
     try {
       const result = await deps.gateway.consultInvoice(comprobanteToFecaReq(row, await associationForRow(db, row)));
-      if (!result) await updateOrphan(db, key, row.id, { estado: "rechazado", resultado: "R", errores: RECONCILIATION_NOT_FOUND_REASON });
+      if (!result) await updateOrphan(db, key, row.id, { estado: "rechazado", resultado: "R", errores: phaseFailure(RECONCILIATION_NOT_FOUND_REASON, "reconciliation") });
       else if (!isMatchingResult(row, result)) {
-        await updateOrphan(db, key, row.id, { estado: "incierto", errores: RECONCILIATION_MISMATCH_REASON });
+        await updateOrphan(db, key, row.id, { estado: "incierto", errores: phaseFailure(RECONCILIATION_MISMATCH_REASON, "reconciliation") });
         throw new ComprobanteEmissionError(RECONCILIATION_MISMATCH_REASON);
       }
       else if (!result.cae || !result.caeFchVto) {
-        await updateOrphan(db, key, row.id, { estado: "incierto", errores: RECONCILIATION_UNCERTAIN_REASON });
+        await updateOrphan(db, key, row.id, { estado: "incierto", errores: phaseFailure(RECONCILIATION_UNCERTAIN_REASON, "reconciliation") });
         throw new ComprobanteEmissionError(RECONCILIATION_UNCERTAIN_REASON);
       } else await updateOrphan(db, key, row.id, { estado: "aprobado", cae: result.cae, caeVto: result.caeFchVto, resultado: "A", errores: null });
     } catch (error) {
       if (error instanceof ComprobanteEmissionError && [RECONCILIATION_UNCERTAIN_REASON, RECONCILIATION_MISMATCH_REASON].includes(error.message)) throw error;
       const reason = `${RECONCILIATION_UNCERTAIN_REASON} Causa: ${emissionFailureCause(error)}`;
-      await updateOrphan(db, key, row.id, { estado: "incierto", errores: reason });
+      await updateOrphan(db, key, row.id, { estado: "incierto", errores: phaseFailure(reason, "reconciliation") });
       throw new ComprobanteEmissionError(reason);
     }
   }
@@ -335,12 +336,13 @@ async function persistById(db: Db, key: string, id: string, patch: Partial<typeo
   });
 }
 
-export async function emitComprobante(deps: ComprobanteEmissionDeps, input: ComprobanteEmissionInput): Promise<ComprobanteEmissionResult> {
+async function emitComprobanteInner(deps: ComprobanteEmissionDeps, input: ComprobanteEmissionInput): Promise<ComprobanteEmissionResult> {
   const env = deps.env ?? process.env;
   assertEmissionConfiguration(env);
   const configuredEnvironment = deps.environment ?? resolveArcaEnvironment(env ?? { ARCA_ENV: "homologacion" });
   const environment: ComprobanteAmbiente = configuredEnvironment === "production" ? "produccion" : configuredEnvironment;
   const now = deps.now ?? (() => new Date());
+  tracePhase("validation");
   const validated = validateComprobante({ ...input, ambiente: environment, estado: "borrador" });
   assertArcaDateWindow(validated.fecha, now());
   if (!input.idempotencyKey.trim()) throw new ComprobanteEmissionError("La clave de idempotencia es obligatoria.");
@@ -370,6 +372,7 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
   }
   if (staleClaim?.uncertain && !staleClaim.owner) await clearUncertainClaim(deps.db, key, staleClaim);
   await claimSeries(deps.db, key, owner);
+  tracePhase("claim");
 
   let authorized = false;
   let reservationPersisted = false;
@@ -391,6 +394,7 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
       if (existing.estado === "borrador") throw new ComprobanteEmissionError("El comprobante existente está en borrador y requiere aprobación explícita.");
       throw new ComprobanteEmissionError(RECONCILIATION_UNCERTAIN_REASON);
     }
+    tracePhase("last_number");
     const last = await deps.gateway.ultimoAutorizado(validated.emisorCuit, validated.ptoVta, validated.cbteTipo as 1 | 6 | 11);
     if (!Number.isInteger(last) || last < 0 || last >= 99_999_999) throw new ComprobanteEmissionError("FECompUltimoAutorizado devolvió un número inválido.");
     const cbteNro = last + 1;
@@ -404,6 +408,8 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
     }).returning());
     if (!reserved) throw new ComprobanteEmissionError("No se pudo persistir la reserva del comprobante.");
     reservationPersisted = true;
+    setTraceComprobante(reserved.id);
+    tracePhase("reservation", { cbteNro: reserved.cbteNro });
     let dispatched = false;
     let remoteNumberAdvanced = false;
     try {
@@ -414,6 +420,7 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
       // may have approved outside this process.
       let latest: number;
       try {
+        tracePhase("last_number");
         latest = await deps.gateway.ultimoAutorizado(validated.emisorCuit, validated.ptoVta, validated.cbteTipo as 1 | 6 | 11);
       } catch (error) {
         throw error;
@@ -429,40 +436,53 @@ export async function emitComprobante(deps: ComprobanteEmissionDeps, input: Comp
         }
         throw new ComprobanteEmissionError(EMISSION_UNCERTAIN_REASON);
       }
+      tracePhase("preparation");
       const result = await deps.gateway.issueInvoice(comprobanteToFecaReq(reserved, creditAssociation), async () => {
         if (!await ownsSeriesClaim(deps.db, key, owner)) {
           throw new ComprobanteEmissionError("La reserva perdió el lock de la serie; requiere verificación manual.");
         }
       }, () => {
         dispatched = true;
-        console.info(JSON.stringify({ event: "fecaesolicitar_dispatch", comprobanteId: reserved.id }));
+        tracePhase("dispatched");
       });
+      tracePhase("response");
       if (!isMatchingResult(reserved, result) || !result.cae || !result.caeFchVto) throw new Error("Respuesta ARCA ilegible o inconsistente.");
       const approved = await persistById(deps.db, key, reserved.id, { estado: "aprobado", cae: result.cae, caeVto: result.caeFchVto, resultado: "A", errores: null });
       authorized = true;
       return resultFromRow(approved, true);
     } catch (error) {
-      console.error(JSON.stringify({
-        event: "comprobante_emission_failed", comprobanteId: reserved.id, dispatched,
-        cause: emissionFailureCause(error),
+      traceFailure(emissionFailureCause(error), {
+        dispatched,
         trace: error instanceof Error ? error.stack?.split("\n").filter(line => line.trimStart().startsWith("at ")).slice(0, 10).map(sanitizeFaultText) : undefined,
-      }));
+      });
       if (!dispatched && !remoteNumberAdvanced) {
-        const local = await persistById(deps.db, key, reserved.id, { estado: "rechazado", resultado: "L", errores: `Fallo local antes de enviar a ARCA: ${emissionFailureCause(error)}`, observaciones: "FECAESolicitar no fue enviado. El número queda liberado." });
+        const local = await persistById(deps.db, key, reserved.id, { estado: "rechazado", resultado: "L", errores: phaseFailure(`Fallo local antes de enviar a ARCA: ${emissionFailureCause(error)}`), observaciones: "FECAESolicitar no fue enviado. El número queda liberado." });
         return resultFromRow(local, false);
       }
       if (isDefinitiveRejection(error)) {
         uncertainOutcome = true;
-        const rejected = await persistById(deps.db, key, reserved.id, { estado: "rechazado", resultado: "R", errores: rejectionReason(error) });
+        const rejected = await persistById(deps.db, key, reserved.id, { estado: "rechazado", resultado: "R", errores: phaseFailure(rejectionReason(error)) });
         uncertainOutcome = false;
         return resultFromRow(rejected, false);
       }
       uncertainOutcome = true;
-      const uncertain = await persistById(deps.db, key, reserved.id, { estado: "incierto", errores: `${EMISSION_UNCERTAIN_REASON} Causa: ${emissionFailureCause(error)}`, observaciones: dispatched ? "Solicitud FECAESolicitar enviada; autorización pendiente de verificar." : "La numeración ya avanzó en ARCA; requiere consulta del comprobante." });
+      const uncertain = await persistById(deps.db, key, reserved.id, { estado: "incierto", errores: phaseFailure(`${EMISSION_UNCERTAIN_REASON} Causa: ${emissionFailureCause(error)}`), observaciones: dispatched ? "Solicitud FECAESolicitar enviada; autorización pendiente de verificar." : "La numeración ya avanzó en ARCA; requiere consulta del comprobante." });
       return resultFromRow(uncertain, false);
     }
   } finally {
     await releaseClaim(deps.db, key, owner, authorized || (!uncertainOutcome && (reservationPersisted || reconciliationCompleted)), now().getTime());
   }
+}
+export async function emitComprobante(deps: ComprobanteEmissionDeps, input: ComprobanteEmissionInput): Promise<ComprobanteEmissionResult> {
+  return withEmissionTrace(input.idempotencyKey ?? "unvalidated", async () => {
+    try {
+      const result = await emitComprobanteInner(deps, input);
+      tracePhase("final", { estado: result.estado, comprobanteId: result.id });
+      return result;
+    } catch (error) {
+      traceFailure(emissionFailureCause(error));
+      throw error;
+    }
+  });
 }
 export const emitFiscalComprobante = emitComprobante;

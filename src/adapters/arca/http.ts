@@ -1,3 +1,4 @@
+import { tracePhase } from "@/lib/emission/trace";
 /**
  * Shared HTTP transport for the ARCA SOAP adapters.
  *
@@ -108,6 +109,8 @@ export function createFetchTransport(options: FetchTransportOptions = {}): HttpT
           },
         );
       }
+
+      if (onDispatched) tracePhase("response", { httpStatus: res.status });
 
       // Read the body INSIDE the same abort signal so a hung body also aborts.
       let text: string;

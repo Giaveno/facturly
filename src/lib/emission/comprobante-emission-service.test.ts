@@ -1,3 +1,4 @@
+import { emissionDiagnostic } from "@/domain/emission-diagnostic";
 import { fiscalDate } from "@/domain/fiscal-date";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
@@ -97,7 +98,8 @@ describe("comprobante emission service", () => {
     const base = new ArcaGatewayFake(undefined, now);
     const gateway = { getIvaCondition: base.getIvaCondition.bind(base), ultimoAutorizado: base.ultimoAutorizado.bind(base), issueInvoice: async () => { throw new Error(cause); } };
     const failed = await emitComprobante({ db: handle.db, gateway, now, env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" } }, input(empresa));
-    expect(failed).toMatchObject({ estado: "rechazado", resultado: "L", errores: `Fallo local antes de enviar a ARCA: ${cause}` });
+    expect(failed).toMatchObject({ estado: "rechazado", resultado: "L", errores: expect.any(String) });
+    expect(emissionDiagnostic(failed.errores)).toEqual({ phase: "preparation", cause: `Fallo local antes de enviar a ARCA: ${cause}` });
     expect((await handle.db.select().from(emissionSeriesClaims))[0]).toMatchObject({ owner: null, uncertain: false });
     const next = await emitComprobante({ db: handle.db, gateway: base, now, env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" } }, input(empresa));
     expect(next).toMatchObject({ estado: "aprobado", cbteNro: 1 });
@@ -275,7 +277,7 @@ describe("comprobante emission service", () => {
     const next = await emitComprobante({ db: handle.db, gateway: base, environment: "homologacion", env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" }, now, uncertainGraceMs: 0 }, input(empresa, "next"));
     expect(next.cbteNro).toBe(1);
     const [orphan] = await handle.db.select().from(comprobantes);
-    expect(orphan!.errores).toBe(RECONCILIATION_NOT_FOUND_REASON);
+    expect(emissionDiagnostic(orphan!.errores)).toEqual({ phase: "reconciliation", cause: RECONCILIATION_NOT_FOUND_REASON });
   });
 
   it("reconciles a timeout when ARCA did authorize the reserved number", async () => {

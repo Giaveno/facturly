@@ -1,4 +1,5 @@
 "use client";
+import { emissionDiagnostic, emissionPhaseLabels } from "@/domain/emission-diagnostic";
 import { fiscalDate } from "@/domain/fiscal-date";
 
 import { useState, type FormEvent } from "react";
@@ -11,7 +12,8 @@ interface FiscalError { code?: string | number; message?: string }
 export function interpretEmissionResponse(data: Record<string, unknown>): { kind: "success" | "rejected" | "blocked" | "disabled"; text: string; retryAllowed: boolean } {
   const errors = Array.isArray(data.errors) ? data.errors : data.code ? [{ code: data.code, message: data.message ?? data.error }] : [];
   const detail = errors.map((error: FiscalError) => `${error.code ?? "ARCA"}: ${error.message ?? "Error fiscal"}`).join(" · ");
-  const storedError = typeof data.errores === "string" ? data.errores : "";
+  const diagnostic = emissionDiagnostic(typeof data.errores === "string" ? data.errores : "");
+  const storedError = diagnostic.phase ? `Fase: ${emissionPhaseLabels[diagnostic.phase] ?? diagnostic.phase}. Causa: ${diagnostic.cause}` : diagnostic.cause;
   const text = detail || storedError || (typeof data.error === "string" ? data.error : "") || (typeof data.message === "string" ? data.message : "") || "No se pudo emitir el comprobante.";
   if (data.code === "EMISSIONS_DISABLED") return { kind: "disabled", text: "La emisión está deshabilitada en este servidor (configuración)", retryAllowed: false };
   if (data.code === "EMISSIONS_HOMOLOGATION_REQUIRED") return { kind: "disabled", text, retryAllowed: false };

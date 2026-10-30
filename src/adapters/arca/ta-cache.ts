@@ -1,3 +1,4 @@
+import { tracePhase, withPhase } from "@/lib/emission/trace";
 /**
  * WSAA TA (Token+Sign) cache, keyed by ARCA service (optionally scoped by the
  * signing certificate so a TA signed by a rotated/revoked cert is never reused).
@@ -134,12 +135,17 @@ export class TaCache {
 
   /** Returns a valid TA for `service`, renewing only when necessary. */
   async get(service: string): Promise<WsaaTa> {
+    return withPhase("wsaa", () => this.getInner(service));
+  }
+
+  private async getInner(service: string): Promise<WsaaTa> {
     const key = this.keyFor(service);
     const nowMs = this.clock().getTime();
     const entry = await this.store.get(key);
     this.logger.info("ta_cache_lookup", { service, cache_key_hash: createHash("sha256").update(key).digest("hex").slice(0, 12), cache: entry ? "hit" : "miss" });
 
     if (entry && !shouldRenew(nowMs, entry, this.policy)) {
+      tracePhase("wsaa", { service, cache: "hit", login: "cached" });
       return this.toTa(entry);
     }
 
@@ -175,7 +181,9 @@ export class TaCache {
   ): Promise<WsaaTa> {
     let ta: WsaaTa;
     try {
+      tracePhase("wsaa", { service, cache: entry ? "expired" : "miss", login: "started" });
       ta = await this.wsaa.loginCms(service);
+      tracePhase("wsaa", { service, login: "succeeded" });
     } catch (err) {
       // A genuine loginCms failure: fall back to a still-valid cached TA (this
       // is the WSAA-cooldown path), otherwise rethrow.
