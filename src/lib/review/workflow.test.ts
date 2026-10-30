@@ -28,7 +28,7 @@ import { buildFecaReq } from "@/lib/emission/emission-service";
 import { buildFecaesolicitarEnvelope, fecaReqToSolicitar } from "@/adapters/arca/wsfe";
 import type { Db } from "@/lib/db/types";
 
-const FIXED_DATE = new Date("2026-09-22T00:00:00.000Z");
+const FIXED_DATE = new Date("2026-09-22T12:00:00.000Z");
 
 describe("review workflow — invoice status machine (server-side)", () => {
   let db: Db;
@@ -118,6 +118,18 @@ describe("review workflow — invoice status machine (server-side)", () => {
     expect(soap).not.toContain("Items");
   });
 
+  it.each([
+    ["2026-10-30T01:30:00Z", "2026-10-29"], // 22:30 Argentina
+    ["2026-10-30T03:30:00Z", "2026-10-30"], // 00:30 Argentina
+  ])("approval uses Argentina fiscal date at %s", async (instant, expectedDate) => {
+    const rowId = await seedRow("CORRECTED", null);
+    await db.update(ocrRows).set({ recipientMode: "consumer_final" }).where(eq(ocrRows.id, rowId));
+    const inv = await materializeInvoice(db, rowId);
+    await markInvoiceReviewed(db, inv.id);
+    const approved = await approveInvoice(db, gateway, inv.id, () => new Date(instant));
+    expect(approved.fechaEmision).toBe(expectedDate);
+    expect(approved.fechaVto).toBe(expectedDate);
+  });
   it("materializes a CONFIDENT row as PENDING (awaiting review)", async () => {
     const rowId = await seedRow("CONFIDENT", "30710145764");
     const inv = await materializeInvoice(db, rowId);

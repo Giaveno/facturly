@@ -1,3 +1,4 @@
+import { fiscalDate } from "@/domain/fiscal-date";
 /**
  * Review workflow — the SERVER-SIDE invoice status machine.
  *
@@ -244,7 +245,7 @@ async function approveInvoiceLocked(
   const decision = cbteTipo(client.condicionIva, condicion);
   const fiscal = buildReviewFiscalData({ ...row, issuerCondition: client.condicionIva }, condicion);
   const amounts = fiscal.amounts;
-  const today = clock().toISOString().slice(0, 10);
+  const today = fiscalDate(clock());
 
   const [updated] = await db
     .update(invoices)

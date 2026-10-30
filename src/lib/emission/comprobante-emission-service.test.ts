@@ -1,3 +1,4 @@
+import { fiscalDate } from "@/domain/fiscal-date";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { ArcaBusinessError } from "@/adapters/arca/errors";
@@ -123,6 +124,29 @@ describe("comprobante emission service", () => {
     return row!;
   }
 
+  it.each([
+    ["2026-10-30T01:30:00Z", "2026-10-29"], // 22:30 Argentina
+    ["2026-10-30T03:30:00Z", "2026-10-30"], // 00:30 Argentina
+  ])("persists the Argentina fiscal date and rejects tomorrow at %s", async (instant, expectedDate) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(instant));
+    try {
+      const empresa = await company();
+      const base = new ArcaGatewayFake(undefined, () => new Date());
+      const issueInvoice = vi.spyOn(base, "issueInvoice");
+      const deps = { db: handle.db, gateway: base, env: { EMISSIONS_ENABLED: "true", ARCA_ENV: "homologacion" } };
+      const request = { ...input(empresa), fecha: fiscalDate() };
+      const result = await emitComprobante(deps, request);
+      expect(result.estado).toBe("aprobado");
+      const [stored] = await handle.db.select().from(comprobantes).where(eq(comprobantes.id, result.id));
+      expect(stored!.fecha).toBe(expectedDate);
+      expect(issueInvoice.mock.calls[0]![0].fechaEmision).toBe(expectedDate);
+      const tomorrow = new Date(`${expectedDate}T12:00:00Z`);
+      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+      await expect(emitComprobante(deps, { ...request, idempotencyKey: crypto.randomUUID(), fecha: tomorrow.toISOString().slice(0, 10) })).rejects.toThrow("ventana");
+      expect(issueInvoice).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
   it("reserves under the series lock and is idempotent per company", async () => {
     const empresa = await company();
     const gateway = new ArcaGatewayFake(undefined, now);

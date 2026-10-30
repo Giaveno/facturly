@@ -1,4 +1,5 @@
 "use client";
+import { fiscalDate } from "@/domain/fiscal-date";
 
 import { useState, type FormEvent } from "react";
 
@@ -28,7 +29,7 @@ interface Company { id: string; razonSocial: string; cuit: string }
 export default function EmissionForm({ environment, companies }: { environment: Environment; companies: Company[] }) {
   const [idempotencyKey, setIdempotencyKey] = useState(newKey);
   const [item, setItem] = useState<Item>({ descripcion: "", neto: "", alicuota: "21" });
-  const [form, setForm] = useState({ empresaId: "", cbteTipo: "1", ptoVta: "1", concepto: "1", docTipo: "99", docNro: "0", condicionIvaReceptor: "5", fecha: new Date().toISOString().slice(0, 10) });
+  const [form, setForm] = useState({ empresaId: "", cbteTipo: "1", ptoVta: "1", concepto: "1", docTipo: "99", docNro: "0", condicionIvaReceptor: "5", fecha: fiscalDate() });
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [retryAllowed, setRetryAllowed] = useState(true);

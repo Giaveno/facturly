@@ -1,3 +1,4 @@
+import { fiscalDate } from "@/domain/fiscal-date";
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { validateComprobante, type ComprobanteAmbiente, type ComprobanteItem, type ComprobanteValidationInput } from "@/domain/comprobantes";
@@ -58,11 +59,11 @@ const DAY_MS = 86_400_000;
 const CLAIM_WAIT_MS = 10;
 const CLAIM_WAIT_ATTEMPTS = Math.ceil(SERIES_LEASE_MS / CLAIM_WAIT_MS);
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
-function isoDate(now: Date): string { return now.toISOString().slice(0, 10); }
+
 
 /** ARCA permits a comprobante date no more than five calendar days in the past. */
 export function assertArcaDateWindow(fecha: string, now = new Date()): void {
-  const today = Date.parse(`${isoDate(now)}T00:00:00Z`);
+  const today = Date.parse(`${fiscalDate(now)}T00:00:00Z`);
   const issued = Date.parse(`${fecha}T00:00:00Z`);
   if (!Number.isFinite(issued) || issued > today || today - issued > 5 * DAY_MS) {
     throw new ComprobanteEmissionError("La fecha del comprobante debe estar dentro de la ventana de 5 días calendario de ARCA.");

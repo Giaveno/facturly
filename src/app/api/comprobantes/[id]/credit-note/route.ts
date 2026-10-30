@@ -1,3 +1,4 @@
+import { fiscalDate } from "@/domain/fiscal-date";
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -32,7 +33,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       emisorCuit: original.emisorCuit, emisorCondicionIva: original.emisorCondicionIva,
       cbteTipo: creditNoteTypeFor(original.cbteTipo as InvoiceCbteTipo), ptoVta: original.ptoVta, concepto: original.concepto,
       docTipo: original.docTipo, docNro: original.docNro, condicionIvaReceptor: original.condicionIvaReceptor,
-      fecha: new Date().toISOString().slice(0, 10), importeNetoCentavos: original.importeNetoCentavos,
+      fecha: fiscalDate(), importeNetoCentavos: original.importeNetoCentavos,
       importeIvaCentavos: original.importeIvaCentavos, importeExentoCentavos: original.importeExentoCentavos,
       importeTributosCentavos: original.importeTributosCentavos, importeTotalCentavos: original.importeTotalCentavos,
       items: (Array.isArray(original.items) ? original.items : []) as never,
