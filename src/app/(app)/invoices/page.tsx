@@ -24,10 +24,11 @@ export default async function InvoicesPage() {
   return (
     <main className="page-content">
       <div className="page-heading"><div><p className="eyebrow">Comprobantes emitidos</p><h1>Facturas</h1><p className="lede">Consultá las facturas emitidas y descargá el PDF cuando esté disponible.</p></div><span className="count-badge">{approvedCount} comprobantes aprobados</span></div>
+      <ComprobantesList />
       {approvedCount === 0 && rows.length === 0 ? (
         <div className="empty-state"><strong>Todavía no hay facturas emitidas.</strong><p>Las facturas aparecerán acá una vez que se hayan emitido.</p><Link href="/review">Ir a revisión</Link></div>
       ) : rows.length > 0 ? (
-        <div className="table-wrap"><table>
+        <section aria-label="Históricos, solo lectura"><h2>Históricos, solo lectura</h2><p>Comprobantes del flujo anterior. No se importan ni se reenvían a ARCA.</p><div className="table-wrap"><table>
           <thead>
             <tr>
               <th>Empresa emisora</th><th>Tipo</th><th>Número</th>
@@ -47,7 +48,7 @@ export default async function InvoicesPage() {
                     ? formatCentavos(r.importeTotalCentavos)
                     : "—"}
                 </td>
-                <td>{r.status}</td>
+                <td>Histórico, solo lectura</td>
                 <td>
                   {r.cae ? (
                     <Link href={`/api/invoices/${r.invoiceId}/pdf`}>
@@ -60,10 +61,9 @@ export default async function InvoicesPage() {
               </tr>
             ))}
           </tbody>
-        </table></div>
+        </table></div></section>
       ) : null}
       <ReservedAttempts rows={attempts} enabled={process.env.ARCA_ENV === "homologacion"} />
-      <ComprobantesList />
     </main>
   );
 }
