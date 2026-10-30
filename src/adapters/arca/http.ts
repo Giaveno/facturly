@@ -15,7 +15,7 @@ import { tracePhase } from "@/lib/emission/trace";
  *   - structured logging + counters (timeouts, transient failures).
  */
 
-import { ArcaAuthError, ArcaBusinessError, ArcaTransientError, classifyFaultCode, parseSoapFault } from "./errors";
+import { ArcaAuthError, ArcaBusinessError, ArcaTransientError, classifyFaultCode, normalizeFaultCode, parseSoapFault } from "./errors";
 import { noopLogger, noopMetrics, type ArcaLogger, type ArcaMetrics } from "./logger";
 
 /** Minimal HTTP POST contract shared by all three adapters. */
@@ -141,8 +141,9 @@ export function createFetchTransport(options: FetchTransportOptions = {}): HttpT
       const fault = parseSoapFault(text);
       if (fault) {
         const kind = classifyFaultCode(fault.faultcode);
+        const faultcode = normalizeFaultCode(fault.faultcode);
         const message = "ARCA SOAP Fault";
-        const details = { category: "soap-fault" as const, httpStatus: res.status };
+        const details = { category: "soap-fault" as const, faultcode, httpStatus: res.status };
         logger.error("soap_fault", { url, kind, category: "soap-fault", status: res.status });
         metrics.increment("soap_fault");
         if (kind === "auth") throw new ArcaAuthError(message, details);

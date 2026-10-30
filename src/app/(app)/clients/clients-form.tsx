@@ -52,7 +52,7 @@ export default function ClientsForm() {
   }
 
   return (
-    <form className="surface form-stack" onSubmit={onSubmit}>
+    <form className="form-stack client-create-form" onSubmit={onSubmit}>
       <label>
         Razón social
         <input name="razonSocial" required />

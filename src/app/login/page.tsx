@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { signIn } from "next-auth/react";
+import { ShieldCheck } from "lucide-react";
 
 /**
  * Email and password login through NextAuth credentials provider.
@@ -39,7 +40,8 @@ export default function LoginPage() {
   return (
     <main className="auth-page">
       <section className="surface auth-card">
-      <p className="eyebrow">Facturly · acceso seguro</p>
+      <div className="brand" aria-label="Facturly"><span className="brand-mark" aria-hidden="true">F</span>facturly<span className="brand-dot">.</span></div>
+      <p className="eyebrow">Tu espacio de trabajo</p>
       <h1>Iniciar sesión</h1>
       <p>Ingresá a tu espacio de trabajo para gestionar comprobantes.</p>
       <form className="auth-form" onSubmit={onSubmit}>
@@ -61,6 +63,7 @@ export default function LoginPage() {
         </button>
       </form>
       {error ? <p className="error" role="alert">{error}</p> : null}
+      <p className="auth-note"><ShieldCheck size={13} aria-hidden="true" /> Acceso seguro a tus comprobantes</p>
       </section>
     </main>
   );

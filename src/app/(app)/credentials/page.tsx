@@ -20,13 +20,13 @@ export default async function CredentialsPage() {
       <section className="surface credential-summary"><h2>Certificado cargado</h2>
       {info ? (
         <dl>
-          <dt>Subject</dt>
+          <dt>Titular</dt>
           <dd>{info.subjectCn}</dd>
           <dt>CUIT</dt>
-          <dd>{info.cuit ?? "not found in certificate"}</dd>
-          <dt>Valid from</dt>
+          <dd>{info.cuit ?? "No identificado en el certificado"}</dd>
+          <dt>Válido desde</dt>
           <dd>{info.notBefore}</dd>
-          <dt>Expires</dt>
+          <dt>Vencimiento</dt>
           <dd>{info.notAfter}</dd>
           <dt>Huella SHA-256</dt>
           <dd>{info.fingerprint}</dd>

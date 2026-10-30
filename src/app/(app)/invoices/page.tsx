@@ -28,12 +28,12 @@ export default async function InvoicesPage() {
       {approvedCount === 0 && rows.length === 0 ? (
         <div className="empty-state"><strong>Todavía no hay facturas emitidas.</strong><p>Las facturas aparecerán acá una vez que se hayan emitido.</p><Link href="/review">Ir a revisión</Link></div>
       ) : rows.length > 0 ? (
-        <section aria-label="Históricos, solo lectura"><h2>Históricos, solo lectura</h2><p>Comprobantes del flujo anterior. No se importan ni se reenvían a ARCA.</p><div className="table-wrap"><table>
+        <section className="page-section historical-invoices" aria-label="Históricos, solo lectura"><h2>Históricos, solo lectura</h2><p>Comprobantes del flujo anterior. No se importan ni se reenvían a ARCA.</p><div className="table-wrap"><table>
           <thead>
             <tr>
               <th>Empresa emisora</th><th>Tipo</th><th>Número</th>
               <th>CAE</th>
-              <th>Importe</th><th>Estado</th><th>PDF</th>
+              <th className="numeric">Importe</th><th>Estado</th><th>PDF</th>
             </tr>
           </thead>
           <tbody>
@@ -43,7 +43,7 @@ export default async function InvoicesPage() {
                 <td>{r.cbteTipo ?? "—"}</td>
                 <td>{r.cbteNro ?? "—"}</td>
                 <td>{r.cae ?? "—"}</td>
-                <td>
+                <td className="numeric">
                   {r.importeTotalCentavos != null
                     ? formatCentavos(r.importeTotalCentavos)
                     : "—"}

@@ -8,6 +8,7 @@ import {
   classifyArcaErrorCode,
   classifyFaultCode,
   hasSoapFault,
+  normalizeFaultCode,
   parseSoapFault,
 } from "./errors";
 
@@ -20,17 +21,23 @@ describe("errors — taxonomy", () => {
     expect(new ArcaTransientError("x")).toBeInstanceOf(Error);
   });
 
-  it("carries code/faultcode/faultstring/retryAfterMs through", () => {
-    const e = new ArcaBusinessError("rejected", {
+  it("stores only normalized allowlisted faultcodes and never faultstring text", () => {
+    const allowed = new ArcaBusinessError("rejected", {
       code: "10049",
-      faultcode: "soapenv:Client",
-      faultstring: "bad request",
+      faultcode: "soapenv:coe.alreadyAuthenticated",
+      faultstring: "SECRET provider text",
       retryAfterMs: 5000,
     });
-    expect(e.code).toBe("10049");
-    expect(e.faultcode).toBe("soapenv:Client");
-    expect(e.faultstring).toBe("bad request");
-    expect(e.retryAfterMs).toBe(5000);
+    const unknown = new ArcaBusinessError("rejected", {
+      faultcode: "soapenv:Client",
+      faultstring: "OTHER SECRET",
+    });
+    expect(allowed.code).toBe("10049");
+    expect(allowed.faultcode).toBe("coe.alreadyAuthenticated");
+    expect(allowed.faultstring).toBeUndefined();
+    expect(allowed.retryAfterMs).toBe(5000);
+    expect(unknown.faultcode).toBe("unknown");
+    expect(unknown.faultstring).toBeUndefined();
   });
 });
 
@@ -64,12 +71,34 @@ describe("errors — SOAP Fault parsing", () => {
 });
 
 describe("errors — classification", () => {
-  it("classifies fault codes: Server→transient, Client→business, auth-ish→auth", () => {
-    expect(classifyFaultCode("soapenv:Server")).toBe("transient");
-    expect(classifyFaultCode("soapenv:Client")).toBe("business");
-    expect(classifyFaultCode("ns2:failedAuthentication")).toBe("auth");
-    expect(classifyFaultCode("ns2:InvalidExpiredToken")).toBe("auth");
-    expect(classifyFaultCode(undefined)).toBe("business");
+  it.each([
+    ["coe.alreadyAuthenticated", "coe.alreadyAuthenticated"],
+    ["ns1:coe.notAuthorized", "coe.notAuthorized"],
+    ["cms.cert.untrusted", "cms.cert.untrusted"],
+    ["cms.cert.expired", "cms.cert.expired"],
+    ["cms.sign.invalid", "cms.sign.invalid"],
+    ["xml.generationTime.invalid", "xml.generationTime.invalid"],
+    ["xml.expirationTime.expired", "xml.expirationTime.expired"],
+    ["soapenv:Client", "unknown"],
+    [undefined, "unknown"],
+  ])("normalizes %s to %s", (input, expected) => {
+    expect(normalizeFaultCode(input)).toBe(expected);
+  });
+
+  it.each([
+    ["coe.alreadyAuthenticated", "business"],
+    ["coe.notAuthorized", "auth"],
+    ["cms.cert.untrusted", "auth"],
+    ["cms.cert.expired", "auth"],
+    ["cms.sign.invalid", "auth"],
+    ["xml.generationTime.invalid", "business"],
+    ["xml.expirationTime.expired", "business"],
+    ["Server", "transient"],
+    ["soapenv:Server", "transient"],
+    ["ns2:failedAuthentication", "business"],
+    [undefined, "business"],
+  ])("classifies explicit fault code %s as %s", (faultcode, expected) => {
+    expect(classifyFaultCode(faultcode)).toBe(expected);
   });
 
   it("classifies ARCA codes without misclassifying no-data 602 as auth", () => {

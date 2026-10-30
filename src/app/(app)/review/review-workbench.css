@@ -1,4 +1,4 @@
-.review-page{--line:#D4D7DC;--ink:#1B212B;--surface:#FCFCF9;--blue:#174CDB;--blue-soft:#EAF0FE;--amber:#986B16;--red:#B24B43;--sans:"DM Sans",Arial,sans-serif;--display:"Space Grotesk",Arial,sans-serif;font-family:var(--sans)}
+.review-page{--line:#D4D7DC;--ink:#1B212B;--surface:#FCFCF9;--blue:#174CDB;--blue-soft:#EAF0FE;--amber:#986B16;--red:#B24B43;--sans:Arial,Helvetica,sans-serif;--display:Arial,Helvetica,sans-serif;font-family:var(--sans)}
 .review-page .btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;min-height:40px;border:1px solid var(--line);border-radius:6px;background:#fff;padding:8px 13px;font-size:12px;font-weight:600;color:var(--ink)}
 .review-page .btn-primary{background:var(--blue);color:#fff;border-color:var(--blue)}
 .review-page .btn-quiet{background:transparent;border-color:transparent;color:#64707D}
@@ -40,3 +40,32 @@
 .fiscal-preview dt { font-size: 12px; color: var(--text-muted, #666); }
 .fiscal-preview dd { margin: 3px 0 0; overflow-wrap: anywhere; }
 .approval-dialog { max-height: 90vh; overflow-y: auto; }
+
+.review-page .queue-sub, .review-page .source-note, .review-page .detail-summary,
+.review-page .tiny-label, .review-page .field-label, .review-page .queue-id,
+.review-page .queue-footer, .review-page .issuer-block small,
+.review-page .issuer-block .issuer-caption, .review-page .viewer-hint { color: var(--muted); }
+.review-page .field select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 5px; background: white; color: var(--ink); }
+.review-page .source-note { line-height: 1.6; }
+.review-page .detail-body h2 { overflow-wrap: anywhere; }
+.review-page .work-identity > span:last-child { min-width: 0; }
+.review-page .work-identity small { overflow-wrap: anywhere; }
+.review-page .queue-filter { flex-wrap: wrap; }
+.review-page .viewer-stage > [role=status] { font-size: 12px; color: var(--muted); }
+.review-page .failed-state button { min-height: 36px; border: 1px solid var(--border); background: var(--surface); border-radius: 6px; padding: 8px 12px; color: var(--foreground); }
+.review-page .fiscal-preview { padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: #f7f8f5; }
+.review-page .fiscal-preview h3 { font-size: 14px; margin: 0 0 12px; }
+.review-page .fiscal-preview dl { grid-template-columns: repeat(2, minmax(0, 1fr)); font-size: 12px; }
+.review-page .fiscal-preview dl > div { min-width: 0; }
+@media (min-width: 1121px) and (max-width: 1250px) {
+  .review-page .review-workbench { grid-template-columns: 205px minmax(0, 1fr); }
+  .review-page .work-content { grid-template-columns: minmax(180px, .8fr) minmax(270px, 1.2fr); }
+  .review-page .queue-top, .review-page .queue-item { padding-left: 12px; padding-right: 12px; }
+}
+@media (max-width: 400px) {
+  .review-page .detail-fields { grid-template-columns: 1fr; }
+  .review-page .work-identity-icon { display: none; }
+  .review-page .work-top { gap: 6px; }
+  .review-page .mobile-work-tabs button { padding: 6px 8px; }
+  .review-page .detail-actions .btn { flex-basis: 45%; }
+}

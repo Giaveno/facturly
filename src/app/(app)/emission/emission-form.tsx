@@ -69,7 +69,7 @@ export default function EmissionForm({ environment, companies }: { environment: 
     }
   }
 
-  return <form className="surface form-stack" onSubmit={submit} aria-label="Formulario de emisión">
+  return <form className="surface form-stack emission-form" onSubmit={submit} aria-label="Formulario de emisión">
     <p className="helper-note">Clave de idempotencia: <code>{idempotencyKey}</code>. Se reutiliza durante los reintentos de esta emisión.</p>
     <div className="form-grid">
       <label>Empresa emisora<select name="empresaId" required value={form.empresaId} onChange={(e) => update("empresaId", e.target.value)}><option value="">Seleccioná una empresa</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.razonSocial} · CUIT {company.cuit}</option>)}</select></label>
